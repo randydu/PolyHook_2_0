@@ -16,6 +16,7 @@ using namespace std::placeholders;
 #include "polyhook2/ADisassembler.hpp"
 #include "polyhook2/ErrorLog.hpp"
 #include "polyhook2/MemProtector.hpp"
+#include "polyhook2/PageAllocator.hpp"
 
 namespace PLH {
 
@@ -24,7 +25,7 @@ public:
 	x64Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis);
 
 	x64Detour(const char* fnAddress, const char* fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis);
-	virtual ~x64Detour() = default;
+	virtual ~x64Detour();
 	virtual bool hook() override;
 
 	Mode getArchType() const override;
@@ -34,6 +35,7 @@ public:
 	uint8_t getPrefJmpSize() const;
 private:
 	bool makeTrampoline(insts_t& prologue, insts_t& trampolineOut);
+	PageAllocator* m_pageAllocator;
 };
 }
 #endif //POLYHOOK_2_X64DETOUR_HPP

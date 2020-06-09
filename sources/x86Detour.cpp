@@ -11,6 +11,13 @@ PLH::x86Detour::x86Detour(const char* fnAddress, const char* fnCallback, uint64_
 
 }
 
+PLH::x86Detour::~x86Detour() {
+	if (m_trampoline != NULL) {
+		delete[](char*)m_trampoline;
+		m_trampoline = NULL;
+	}
+}
+
 PLH::Mode PLH::x86Detour::getArchType() const {
 	return PLH::Mode::x86;
 }
