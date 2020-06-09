@@ -1,5 +1,8 @@
 #include "polyhook2/Detour/ILCallback.hpp"
 
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
 asmjit::CallConv::Id PLH::ILCallback::getCallConv(const std::string& conv) {
 	if (conv == "cdecl") {
 		return asmjit::CallConv::kIdHostCDecl;
@@ -233,15 +236,10 @@ uint64_t PLH::ILCallback::getJitFunc(const asmjit::FuncSignature& sig, const PLH
 	size_t size = code.codeSize();
 
 	// Allocate a virtual memory (executable).
-	m_callbackBuf = (uint64_t)new unsigned char[size];
+	m_callbackBuf = (uint64_t)VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!m_callbackBuf) {
 		__debugbreak();
 		return 0;
-	}
-
-	DWORD oldProtect = 0;
-	if (!VirtualProtect((char*)m_callbackBuf, size, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-		ErrorLog::singleton().push("Failed to set allocated region to executable", ErrorLevel::SEV);
 	}
 
 	// if multiple sections, resolve linkage (1 atm)
@@ -301,9 +299,10 @@ bool PLH::ILCallback::isXmmReg(const uint8_t typeId) const {
 
 PLH::ILCallback::ILCallback() {
 	m_callbackBuf = 0;
+	m_callbackSz = 0;
 	m_trampolinePtr = 0;
 }
 
 PLH::ILCallback::~ILCallback() {
-	delete[] ((unsigned char*)m_callbackBuf);
+	VirtualFree((char*)m_callbackBuf, m_callbackSz, MEM_RELEASE);
 }

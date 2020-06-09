@@ -157,9 +157,7 @@ uint64_t detour_2gb_above(uint64_t address)
 PLH::DETOUR_TRAMPOLINE* PLH::detour_alloc_trampoline(uint64_t pbTarget, uint64_t min, uint64_t max)
 {
 	// We have to place trampolines within +/- 2GB of target.
-
 	DETOUR_TRAMPOLINE* pTrampoline = NULL;
-
 	if (min == 0) {
 		min = detour_2gb_below(pbTarget);
 	}

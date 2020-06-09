@@ -68,6 +68,7 @@ namespace PLH {
 		uint8_t getTypeId(const std::string& type);
 
 		uint64_t m_callbackBuf;
+		uint16_t m_callbackSz;
 		asmjit::x86::Mem argsStack;
 
 		// ptr to trampoline allocated by hook, we hold this so user doesn't need to.

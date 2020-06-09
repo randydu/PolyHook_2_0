@@ -33,7 +33,7 @@ bool PLH::EatHook::hook() {
 	instead allocate a small trampoline within +- 2GB which will do the full
 	width jump to the final destination, and point the EAT to the stub.*/
 	if (offset > std::numeric_limits<uint32_t>::max()) {
-		m_detourAllocation = detour_alloc_trampoline(m_moduleBase, m_moduleBase);
+		m_detourAllocation = detour_alloc_trampoline(m_moduleBase);
 		if (m_detourAllocation == 0) {
 			ErrorLog::singleton().push("EAT hook offset is > 32bit's. Allocation of trampoline necessary and failed to find free page within range", ErrorLevel::INFO);
 			return false;
