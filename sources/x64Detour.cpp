@@ -140,6 +140,7 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 			// contract of pageAllocator is to free blocks by deleting the allocator
 			if (m_pageAllocator) {
 				delete m_pageAllocator;
+				m_pageAllocator = 0;
 			}
 			neededEntryCount = (uint8_t)instsNeedingEntry.size();
 		}
