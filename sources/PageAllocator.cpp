@@ -144,14 +144,14 @@ inline uint64_t PLH::detour_alloc_trampoline_allocate_new(uint64_t pbTarget,
 	return pbTry;
 }
 
-ULONG_PTR detour_2gb_below(uint64_t address)
+uint64_t detour_2gb_below(uint64_t address)
 {
 	return (address > (uint64_t)0x7ff80000) ? address - 0x7ff80000 : 0x80000;
 }
 
-ULONG_PTR detour_2gb_above(uint64_t address)
+uint64_t detour_2gb_above(uint64_t address)
 {
-	return (address < (ULONG_PTR)0xffffffff80000000) ? address + 0x7ff80000 : (ULONG_PTR)0xfffffffffff80000;
+	return (address < (uint64_t)0xffffffff80000000) ? address + 0x7ff80000 : (uint64_t)0xfffffffffff80000;
 }
 
 PLH::DETOUR_TRAMPOLINE* PLH::detour_alloc_trampoline(uint64_t pbTarget, uint64_t min, uint64_t max)
