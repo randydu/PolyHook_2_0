@@ -3,18 +3,19 @@
 //
 #include "polyhook2/Detour/x64Detour.hpp"
 
-PLH::x64Detour::x64Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : PLH::Detour(fnAddress, fnCallback, userTrampVar, dis), m_pageAllocator(0) {
+PLH::x64Detour::x64Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : PLH::Detour(fnAddress, fnCallback, userTrampVar, dis), m_detourAllocation(nullptr) {
 
 }
 
-PLH::x64Detour::x64Detour(const char* fnAddress, const char* fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : PLH::Detour(fnAddress, fnCallback, userTrampVar, dis), m_pageAllocator(0) {
+PLH::x64Detour::x64Detour(const char* fnAddress, const char* fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : PLH::Detour(fnAddress, fnCallback, userTrampVar, dis), m_detourAllocation(nullptr) {
 
 }
 
 PLH::x64Detour::~x64Detour() {
-	if (m_pageAllocator) {
-		delete m_pageAllocator;
-		m_pageAllocator = 0;
+	if (m_detourAllocation) {
+		detour_free_trampoline(m_detourAllocation);
+		m_detourAllocation = 0;
+		m_trampoline = 0;
 	}
 }
 
@@ -136,12 +137,9 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 			return false;
 		}
 
-		if (m_trampoline != NULL) {
-			// contract of pageAllocator is to free blocks by deleting the allocator
-			if (m_pageAllocator) {
-				delete m_pageAllocator;
-				m_pageAllocator = 0;
-			}
+		if (m_detourAllocation != NULL) {
+			detour_free_trampoline(m_detourAllocation);
+			m_detourAllocation = 0;
 			neededEntryCount = (uint8_t)instsNeedingEntry.size();
 		}
 
@@ -149,16 +147,19 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 		m_trampolineSz = (uint16_t)(prolSz + (getMinJmpSize() + destHldrSz) +
 			(getMinJmpSize() + destHldrSz)* neededEntryCount);
 
-		if (!m_pageAllocator) {
-			m_pageAllocator = new PageAllocator(prolStart, 0x80000000);
+		m_detourAllocation = detour_alloc_trampoline(prolStart);
+		if (!m_detourAllocation) {
+			return false;
 		}
-		m_trampoline = m_pageAllocator->getBlock(m_trampolineSz);
 
-		const int64_t delta = m_trampoline - prolStart;
+		const int64_t delta = ((uint64_t)&m_detourAllocation->data[0]) - prolStart;
 
 		if (!buildRelocationList(prologue, prolSz, delta, instsNeedingEntry, instsNeedingReloc))
 			return false;
 	} while (instsNeedingEntry.size() > neededEntryCount);
+
+	// move beyond header
+	m_trampoline = (uint64_t)&m_detourAllocation->data[0];
 
 	const int64_t delta = m_trampoline - prolStart;
 	MemoryProtector prot(m_trampoline, m_trampolineSz, ProtFlag::R | ProtFlag::W | ProtFlag::X, false);

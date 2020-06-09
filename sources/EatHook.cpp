@@ -9,15 +9,15 @@ PLH::EatHook::EatHook(const std::string& apiName, const std::wstring& moduleName
 	, m_apiName(apiName)
     , m_fnCallback(fnCallback)
     , m_userOrigVar(userOrigVar)
-	, m_allocator(nullptr)
+	, m_detourAllocation(nullptr)
 	, m_trampoline(0)
 {}
 
 PLH::EatHook::~EatHook() {
-	// trampoline freed by pageallocator dtor
-	if (m_allocator != nullptr) {
-		delete m_allocator;
-		m_allocator = nullptr;
+	if (m_detourAllocation != nullptr) {
+		detour_free_trampoline(m_detourAllocation);
+		m_detourAllocation = 0;
+		m_trampoline = 0;
 	}
 }
 
@@ -33,11 +33,18 @@ bool PLH::EatHook::hook() {
 	instead allocate a small trampoline within +- 2GB which will do the full
 	width jump to the final destination, and point the EAT to the stub.*/
 	if (offset > std::numeric_limits<uint32_t>::max()) {
-		m_allocator = new PageAllocator(m_moduleBase, 0x80000000);
-		m_trampoline = m_allocator->getBlock(m_trampolineSize);
-		if (m_trampoline == 0) {
+		m_detourAllocation = detour_alloc_trampoline(m_moduleBase, m_moduleBase);
+		if (m_detourAllocation == 0) {
 			ErrorLog::singleton().push("EAT hook offset is > 32bit's. Allocation of trampoline necessary and failed to find free page within range", ErrorLevel::INFO);
 			return false;
+		}
+
+		// move beyond header
+		m_trampoline = (uint64_t)&m_detourAllocation->data[0];
+
+		DWORD oldProtect = 0;
+		if (!VirtualProtect((char*)m_trampoline, DETOUR_TRAMPOLINE_DATA_SIZE, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+			return 0;
 		}
 
 		PLH::ADisassembler::writeEncoding(makeAgnosticJmp(m_trampoline, m_fnCallback));

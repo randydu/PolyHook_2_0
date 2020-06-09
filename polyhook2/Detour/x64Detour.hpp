@@ -35,7 +35,7 @@ public:
 	uint8_t getPrefJmpSize() const;
 private:
 	bool makeTrampoline(insts_t& prologue, insts_t& trampolineOut);
-	PageAllocator* m_pageAllocator;
+	DETOUR_TRAMPOLINE* m_detourAllocation;
 };
 }
 #endif //POLYHOOK_2_X64DETOUR_HPP

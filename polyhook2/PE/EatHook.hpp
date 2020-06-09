@@ -39,7 +39,7 @@ private:
 	uint64_t* m_userOrigVar;
 
 	// only used if EAT offset points >= 2GB
-	PageAllocator* m_allocator;
+	DETOUR_TRAMPOLINE* m_detourAllocation;
 	uint64_t m_trampoline;
 
 	bool m_hooked;
