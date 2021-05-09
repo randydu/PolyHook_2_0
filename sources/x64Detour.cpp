@@ -191,6 +191,7 @@ namespace {
 
 #pragma pack(push, 1)
 
+//13 bytes (mov r10, dest; push r10; ret)
 struct InplaceDetour {
 	uint16_t mov_r10 { 0xba49 };
 	uint64_t target;
@@ -198,24 +199,49 @@ struct InplaceDetour {
 	uint8_t ret {0xc3};
 };
 
+//14 bytes (jmp [rip + 0], (dest) )
+struct InplaceDetour_Jmp {
+	uint16_t jmp { 0x25ff };//2
+	uint32_t zero {0};      // 4
+	uint64_t target;        //8
+};
+
 #pragma pack(pop)
 
-constexpr auto INPLACE_DETOUR_SIZE = sizeof(InplaceDetour);
-
+template<typename T>
 PLH::insts_t makeInplaceDetour(const uint64_t address, const uint64_t destination){
 	PLH::Instruction::Displacement disp { 0 };
 
-	InplaceDetour dt;
+	T dt;
 	dt.target = destination;
 
 	std::vector<uint8_t> destBytes;
-	destBytes.resize(INPLACE_DETOUR_SIZE);
-	memcpy(destBytes.data(), &dt, INPLACE_DETOUR_SIZE);
+	destBytes.resize(sizeof(T));
+	memcpy(destBytes.data(), &dt, sizeof(T));
 	return { PLH::Instruction(address, disp, 0, false, false, destBytes, "inplace-detour", "", PLH::Mode::x64) };
 }
 
+PLH::insts_t makeInplaceDetour(PLH::x64Detour::detour_scheme_t scheme, const uint64_t address, const uint64_t destination){
+	switch(scheme){
+		case PLH::x64Detour::detour_scheme_t::INPLACE:
+			return makeInplaceDetour<InplaceDetour>(address, destination);
+		case PLH::x64Detour::detour_scheme_t::INPLACE_JMP:
+			return makeInplaceDetour<InplaceDetour_Jmp>(address, destination);
+		default:
+			return {};
+	}
 }
 
+}
+
+uint8_t PLH::x64Detour::getMinPrologueSize() const {
+	switch(_detourScheme){
+		case PLH::x64Detour::detour_scheme_t::INPLACE: return sizeof(InplaceDetour);
+		case PLH::x64Detour::detour_scheme_t::INPLACE_JMP: return sizeof(InplaceDetour_Jmp);
+		default:
+			return getMinJmpSize();
+	}
+}
 
 
 bool PLH::x64Detour::hook() {
@@ -252,7 +278,7 @@ bool PLH::x64Detour::hook() {
 	Log::log("Original function:\n" + instsToStr(insts) + "\n", ErrorLevel::INFO);
 
 	
-	uint64_t minProlSz = _detourScheme != detour_scheme_t::INPLACE ? getMinJmpSize() : INPLACE_DETOUR_SIZE; // min size of patches that may split instructions
+	uint64_t minProlSz = getMinPrologueSize();  // min size of patches that may split instructions
 	uint64_t roundProlSz = minProlSz; // nearest size to min that doesn't split any instructions
 
 	std::optional<PLH::insts_t> prologueOpt;
@@ -320,7 +346,11 @@ bool PLH::x64Detour::hook() {
 	} else {
 		//inplace scheme. This is more stable than the cave finder since that may potentially find a region of unstable memory. 
 		// However, this INPLACE scheme may only be done for functions with a large enough prologue, otherwise this will overwrite adjacent bytes
-		m_hookInsts = makeInplaceDetour(m_fnAddress, m_fnCallback);
+		m_hookInsts = makeInplaceDetour(_detourScheme, m_fnAddress, m_fnCallback);
+		if(m_hookInsts.empty()){
+			PLH::Log::log("Unknown inplace detour scheme: " + std::to_string((int)_detourScheme), PLH::ErrorLevel::SEV);
+			return false;
+		}
 	}
 	m_disasm.writeEncoding(m_hookInsts, *this);
 
