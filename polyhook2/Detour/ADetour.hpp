@@ -134,10 +134,11 @@ protected:
 							uint64_t& minProlSz,
 							uint64_t& roundProlSz);
 
-	bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc);
 
 	template<typename MakeJmpFn>
-	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry);
+	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry){
+		return processTrampoline(prologue, jmpTblStart, delta, jmpSz, makeJmp, instsNeedingReloc, instsNeedingEntry, m_disasm, *this);
+	}
 
 	/**
 	Insert nops from [Base, Base+size). We _MUST_ insert multi-byte nops so we don't accidentally
@@ -146,8 +147,11 @@ protected:
 	void writeNop(uint64_t base, uint32_t size);
 };
 
+//Move these functions outside of class scope for unit-testing
+bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc);
+
 template<typename MakeJmpFn>
-PLH::insts_t PLH::Detour::relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry) {
+PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, PLH::MemAccessor& ma) {
 	uint64_t jmpTblCurAddr = jmpTblStart;
 	insts_t jmpTblEntries;
 	for (auto& inst : prologue) {
@@ -157,10 +161,10 @@ PLH::insts_t PLH::Detour::relocateTrampoline(insts_t& prologue, uint64_t jmpTblS
 			// make an entry pointing to where inst did point to
 			auto entry = makeJmp(jmpTblCurAddr, inst);
 			
-			if(m_disasm.getMode() == Mode::x86 || !inst.isCalling()) //x64-call instruction does not need a JMP (only needs a dest-holder)
+			if(dis.getMode() == Mode::x86 || !inst.isCalling()) //x64-call instruction does not need a JMP (only needs a dest-holder)
 				jmpTblCurAddr += jmpSz;
 
-			m_disasm.writeEncoding(entry, *this);
+			dis.writeEncoding(entry, ma);
 			jmpTblEntries.insert(jmpTblEntries.end(), entry.begin(), entry.end());
 		} else if (std::find(instsNeedingReloc.begin(), instsNeedingReloc.end(), inst) != instsNeedingReloc.end()) {
 			assert(inst.hasDisplacement());
@@ -172,7 +176,7 @@ PLH::insts_t PLH::Detour::relocateTrampoline(insts_t& prologue, uint64_t jmpTblS
 			inst.setAddress(inst.getAddress() + delta);
 		}
 
-		m_disasm.writeEncoding(inst, *this);
+		dis.writeEncoding(inst, ma);
 	}
 	return jmpTblEntries;
 }

@@ -3,6 +3,7 @@
 //
 #include <Catch.hpp>
 #include "polyhook2/Detour/x64Detour.hpp"
+#include "polyhook2/Detour/ADetour.hpp"
 #include "polyhook2/CapstoneDisassembler.hpp"
 #include "polyhook2/ZydisDisassembler.hpp"
 
@@ -182,4 +183,65 @@ TEMPLATE_TEST_CASE("Testing 64 detours", "[x64Detour],[ADetour]", PLH::CapstoneD
 		detour.unHook(); // unhook so we can popeffect safely w/o catch allocation happening again
 		REQUIRE(effects.PopEffect().didExecute());
 	}
+}
+
+namespace {
+	void dummy(){}
+}
+
+TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassembler, PLH::ZydisDisassembler) {
+	using namespace PLH;
+
+	TestType dis(Mode::x64);
+
+	SECTION("Indirect Call"){
+		//Win7/x64: BindIoCompletionCallback
+		constexpr uint64_t start_addr = 0x0077517D20;
+		constexpr uint64_t target_addr = 0x776DCE00;
+		constexpr int code_size = 10; //prologue size
+		constexpr uint64_t ret_addr = start_addr + code_size; //0x0077517D2A
+
+		std::vector<uint8_t> codes = {
+			0x48, 0x83, 0xEC, 0x28, 						//sub esp, 28h
+			0xFF, 0x15, 0x08, 0x00, 0x00, 0x00, 			//call qword ptr [rip+8] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
+			'*', '*', '*', '*', '*', '*', '*', '*', 		//fake data
+			0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
+		};
+
+		std::vector<uint8_t> expected = {
+			0x48, 0x83, 0xEC, 0x28, //sub esp, 28h
+			0xFF, 0x15, 0x06, 0x00, 0x00, 0x00, //call qword ptr [rip+6] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
+			0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+8] => ret-addr
+
+			0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
+			0x2A, 0x7D, 0x51, 0x77, 0x00, 0x00, 0x00, 0x00, //ret-addr
+		};
+
+
+		uint64_t code_start = (uint64_t)codes.data();
+		uint64_t code_end = code_start + code_size;
+	
+		x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+		insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+
+		const Instruction& inst = prologue[1];
+		CHECK(inst.isBranching());
+		CHECK(inst.isCalling());
+		CHECK(inst.isDisplacementRelative());
+		CHECK(inst.getDestination() == target_addr);
+
+		insts_t insts_needing_entry;
+		insts_t insts_needing_reloc;
+
+		int64_t delta = 0;
+		CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
+		CHECK(insts_needing_entry.size() == 1);
+		CHECK(insts_needing_reloc.size() == 0);
+
+
+		//insts_t trampolineOut = relocateTrampoline(prologue, jmpTblStart, delta, getMinJmpSize(), makeJmpFn, instsNeedingReloc, instsNeedingEntry);
+	}
+	SECTION("Relative Call"){}
+	SECTION("Indirect Jmp"){}
+	SECTION("Relative Jmp"){}
 }

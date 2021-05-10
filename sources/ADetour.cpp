@@ -128,7 +128,7 @@ bool PLH::Detour::expandProlSelfJmps(insts_t& prol,
 	return true;
 }
 
-bool PLH::Detour::buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t& instsNeedingEntry, PLH::insts_t& instsNeedingReloc) {
+bool PLH::buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t& instsNeedingEntry, PLH::insts_t& instsNeedingReloc) {
 	assert(instsNeedingEntry.size() == 0);
 	assert(instsNeedingReloc.size() == 0);
 	assert(prologue.size() > 0);

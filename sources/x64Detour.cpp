@@ -410,6 +410,10 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 		m_trampoline = tmpTrampoline;
 		const int64_t delta = m_trampoline - prolStart;
 
+		//buildRelocationList expects empty vectors.
+		instsNeedingEntry.clear();
+		instsNeedingReloc.clear();
+		
 		if (!buildRelocationList(prologue, prolSz, delta, instsNeedingEntry, instsNeedingReloc))
 			continue;
 
