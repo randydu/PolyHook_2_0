@@ -161,7 +161,7 @@ PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const in
 			// make an entry pointing to where inst did point to
 			auto entry = makeJmp(jmpTblCurAddr, inst);
 			
-			if(dis.getMode() == Mode::x86 || !inst.isCalling()) //x64-call instruction does not need a JMP (only needs a dest-holder)
+			if(dis.getMode() == Mode::x86 || !inst.m_isIndirect) //x64-indirect-call/jmp instruction does not need a JMP (only needs a dest-holder)
 				jmpTblCurAddr += jmpSz;
 
 			dis.writeEncoding(entry, ma);

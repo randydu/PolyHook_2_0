@@ -445,9 +445,11 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 		// move inst to trampoline and point instruction to entry
 		auto oldDest = inst.getDestination();
 		inst.setAddress(inst.getAddress() + delta);
-		inst.setDestination(inst.isCalling() ? captureAddress : a);
 
-		return inst.isCalling() ? makex64DestHolder(oldDest, captureAddress) : makex64MinimumJump(a, oldDest, captureAddress);
+		bool destHolderOnly = inst.m_isIndirect; //re-use the call instrunction's own displacement storage, no need for extra JMP [xxx]
+		inst.setDestination( destHolderOnly ? captureAddress : a);
+
+		return destHolderOnly ? makex64DestHolder(oldDest, captureAddress) : makex64MinimumJump(a, oldDest, captureAddress);
 	};
 
 	const uint64_t jmpTblStart = jmpToProlAddr + getMinJmpSize();

@@ -141,9 +141,8 @@ bool PLH::buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, con
 			(inst.getDestination() < prolStart ||
 			inst.getDestination() > prolStart + roundProlSz)) {
 
-            //indirect-call always needs an entry (only a dest-holder)
-			//its destination cannot be used for relocating since it is already deferenced.(ref: inst.getDestination)
-            if(inst.isCalling() && inst.m_isIndirect){
+            //call or indirect-jmp always needs an entry (only a dest-holder for indirect-call/jmp, otherwise both a min-jmp and dest-holder are needed as normal)
+            if(inst.isCalling()||inst.m_isIndirect){
 				instsNeedingEntry.push_back(inst);
 			}else{
 				// can inst just be re-encoded or do we need a tbl entry
