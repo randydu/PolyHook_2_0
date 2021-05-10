@@ -245,21 +245,6 @@ uint8_t PLH::x64Detour::getMinPrologueSize() const {
 
 
 bool PLH::x64Detour::hook() {
-	// ------- Must resolve callback first, so that m_disasm branchmap is filled for prologue stuff
-	insts_t callbackInsts = m_disasm.disassemble(m_fnCallback, m_fnCallback, m_fnCallback + 100, *this);
-	if (callbackInsts.empty()) {
-		Log::log("Disassembler unable to decode any valid callback instructions", ErrorLevel::SEV);
-		return false;
-	}
-
-	if (!followJmp(callbackInsts)) {
-		Log::log("Callback jmp resolution failed", ErrorLevel::SEV);
-		return false;
-	}
-
-	// update given fn callback address to resolved one
-	m_fnCallback = callbackInsts.front().getAddress();
-
 	insts_t insts = m_disasm.disassemble(m_fnAddress, m_fnAddress, m_fnAddress + 100, *this);
 	if (insts.empty()) {
 		Log::log("Disassembler unable to decode any valid instructions", ErrorLevel::SEV);
@@ -321,8 +306,8 @@ bool PLH::x64Detour::hook() {
 	MemoryProtector prot(m_fnAddress, m_hookSize, ProtFlag::R | ProtFlag::W | ProtFlag::X, *this);
 	if (_detourScheme == detour_scheme_t::VALLOC2 || (_detourScheme == detour_scheme_t::VALLOC2_FALLBACK_CODE_CAVE && boundedAllocSupported())) {
 		// TODO: We wast a whole page, put this in the PageAllocator instead
-		uint64_t max = (uint64_t)AlignDownwards((char*)calc_2gb_above(m_fnAddress), 0x10000);
-		uint64_t min = (uint64_t)AlignDownwards((char*)calc_2gb_below(m_fnAddress), 0x10000);
+		uint64_t max = (uint64_t)AlignDownwards(calc_2gb_above(m_fnAddress), 0x10000);
+		uint64_t min = (uint64_t)AlignDownwards(calc_2gb_below(m_fnAddress), 0x10000);
 		uint64_t region = (uint64_t)m_allocator.allocate(min, max);
 		if (!region) {
 			Log::log("VirtualAlloc2 failed to find a region near function", ErrorLevel::SEV);
