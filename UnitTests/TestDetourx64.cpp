@@ -275,7 +275,99 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
 		CHECK(tpl == expected);
 	}
-	SECTION("Relative Call"){}
-	SECTION("Indirect Jmp"){}
-	SECTION("Relative Jmp"){}
+	SECTION("Relative Call"){
+	}
+	SECTION("Indirect Jmp"){
+		
+	}
+	SECTION("Relative Jmp"){
+		/* Win8/x64: kernelbase::UnmapViewOfFile()
+		00007FFA8F331D70 | 33D2                     | xor edx,edx                             |
+		00007FFA8F331D72 | EB AC                    | jmp <kernelbase.UnmapViewOfFileEx>      |
+		00007FFA8F331D74 | 90                       | nop                                     |
+		00007FFA8F331D75 | 90                       | nop                                     |
+		*/
+
+		constexpr int code_size = 6; //prologue size (CODE-CAVE scheme)
+
+		std::vector<uint8_t> codes = {
+			0x33, 0xD2, 			// xor edx, edx <== code-start
+			0xEB, 0xAC, 			//jmp <kernelbase.UnmapViewOfFileEx>
+			0x90, 0x90,				//NOP, NOP
+			'*', '*', '*', '*', '*', '*', '*', '*', 		//<== code-end
+		};
+
+		std::vector<uint8_t> expected = {
+			0x33, 0xD2,
+			0xEB, 0x08, 			//jmp eip+8
+			0x90, 0x90,				//NOP, NOP
+
+			0xFF, 0x25, 0x0E, 0x00, 0x00, 0x00, //jmp qword ptr [rip+0Eh] => code-end
+			0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,	// jmp [eip+0]
+
+			0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //jmp-target, to be filled manually
+			0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
+		};
+
+		std::vector<uint8_t> tpl(expected.size());
+
+		uint64_t code_start = (uint64_t)codes.data();
+		uint64_t code_end = code_start + code_size;
+
+		//fill-in the expected code-end
+		*(uint64_t*)(expected.data() + expected.size() - 8) = code_end;
+
+		uint64_t jmp_target = (uint64_t)(codes.data() + 4 + (int8_t)0xAC); //EB AC
+		*(uint64_t*)(expected.data() + expected.size() - 16) = jmp_target;
+	
+		x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+		insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+
+		const Instruction& inst = prologue[1];
+		CHECK(inst.isBranching());
+		CHECK_FALSE(inst.isCalling());
+		CHECK(inst.isDisplacementRelative());
+		CHECK(inst.getDestination() == jmp_target);
+
+		insts_t insts_needing_entry;
+		insts_t insts_needing_reloc;
+
+		const uint64_t prolStart = prologue.front().getAddress();
+		CHECK(prolStart == code_start);
+		const uint64_t trampoline = (uint64_t)tpl.data();
+		const int64_t delta = trampoline - prolStart;
+
+		CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
+		CHECK(insts_needing_entry.size() == 1);
+		CHECK(insts_needing_reloc.size() == 0);
+
+		const uint16_t prolSz = calcInstsSz(prologue);
+		CHECK(prolSz == code_size);
+		const uint64_t jmpToProlAddr = trampoline + prolSz;
+		auto trampolineSz = tpl.size();
+		const uint8_t destHldrSz = 8;
+		const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
+		{
+			const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
+			dis.writeEncoding(jmpToProl, detour);
+		}
+
+		// each jmp tbl entries holder is one slot down from the previous (lambda holds state)
+		const auto makeJmpFn = [=, captureAddress = jmpHolderCurAddr](uint64_t a, PLH::Instruction& inst) mutable {
+			captureAddress -= destHldrSz;
+			assert(captureAddress > (uint64_t)trampoline && (captureAddress + destHldrSz) < (trampoline + trampolineSz));
+
+			// move inst to trampoline and point instruction to entry
+			auto oldDest = inst.getDestination();
+			inst.setAddress(inst.getAddress() + delta);
+			inst.setDestination(inst.isCalling() ? captureAddress : a);
+
+			return inst.isCalling() ? makex64DestHolder(oldDest, captureAddress) : makex64MinimumJump(a, oldDest, captureAddress);
+		};
+
+		const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
+		insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
+
+		CHECK(tpl == expected);
+	}
 }
