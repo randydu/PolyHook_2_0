@@ -148,7 +148,11 @@ protected:
 };
 
 //Move these functions outside of class scope for unit-testing
-bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc);
+using CanRelocFn = std::function<bool(const PLH::Instruction&, int64_t delta)>;
+
+bool canReloc(const PLH::Instruction& inst, int64_t delta);
+
+bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc, CanRelocFn = canReloc);
 
 template<typename MakeJmpFn>
 PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, PLH::MemAccessor& ma) {
