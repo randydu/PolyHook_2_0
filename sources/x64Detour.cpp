@@ -359,7 +359,7 @@ bool PLH::x64Detour::unHook()
 }
 
 
-PLH::insts_t PLH::makeJmpX64(uint64_t a, PLH::Instruction &inst, uint64_t &captureAddress, uint8_t destHldrSz, uint64_t trampoline, size_t trampolineSz, int64_t delta, const PLH::MemAccessor& ma) {
+PLH::insts_t PLH::makeJmpX64(uint64_t& jmpEntryAddr, PLH::Instruction &inst, uint64_t &captureAddress, uint8_t jmpEntrySz, uint8_t destHldrSz, uint64_t trampoline, size_t trampolineSz, int64_t delta, const PLH::MemAccessor& ma) {
     using namespace PLH;
     captureAddress -= destHldrSz;
     assert(captureAddress > (uint64_t)trampoline && (captureAddress + destHldrSz) < (trampoline + trampolineSz));
@@ -369,9 +369,12 @@ PLH::insts_t PLH::makeJmpX64(uint64_t a, PLH::Instruction &inst, uint64_t &captu
     inst.setAddress(inst.getAddress() + delta);
 
     bool destHolderOnly = inst.m_isIndirect; //re-use the call instrunction's own displacement storage, no need for extra JMP [xxx]
-    inst.setDisplacementByDestination(destHolderOnly ? captureAddress : a);
+    inst.setDisplacementByDestination(destHolderOnly ? captureAddress : jmpEntryAddr);
 
-    return destHolderOnly ? makex64DestHolder(oldDest, captureAddress) : makex64MinimumJump(a, oldDest, captureAddress);
+    const auto& result = destHolderOnly ? makex64DestHolder(oldDest, captureAddress) : makex64MinimumJump(jmpEntryAddr, oldDest, captureAddress);
+
+	if(!destHolderOnly) jmpEntryAddr += jmpEntrySz;
+	return result;
 };
 
 bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
@@ -439,11 +442,10 @@ bool PLH::x64Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 	}
 
 	// each jmp tbl entries holder is one slot down from the previous (lambda holds state)
-	const auto makeJmpFn = std::bind(PLH::makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, m_trampoline, m_trampolineSz, delta, this->memAccesor());
+	const auto makeJmpFn = std::bind(PLH::makeJmpX64, _1, _2, jmpHolderCurAddr, getMinJmpSize(), destHldrSz, m_trampoline, m_trampolineSz, delta, this->memAccesor());
 
 	const uint64_t jmpTblStart = jmpToProlAddr + getMinJmpSize();
-	trampolineOut = relocateTrampoline(prologue, jmpTblStart, delta, getMinJmpSize(),
-													makeJmpFn, instsNeedingReloc, instsNeedingEntry);
+	trampolineOut = relocateTrampoline(prologue, jmpTblStart, delta, makeJmpFn, instsNeedingReloc, instsNeedingEntry);
 
 	return true;
 }

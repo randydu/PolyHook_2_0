@@ -105,6 +105,8 @@ bool PLH::x86Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 	PLH::insts_t instsNeedingEntry;
 	PLH::insts_t instsNeedingReloc;
 
+	const auto jmpSz = getJmpSize();
+
 	uint8_t retries = 0;
 	do {
 		if (retries++ > 4) {
@@ -118,7 +120,7 @@ bool PLH::x86Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 		}
 
 		// prol + jmp back to prol + N * jmpEntries
-		m_trampolineSz = (uint16_t)(prolSz + getJmpSize() + getJmpSize() * neededEntryCount);
+		m_trampolineSz = (uint16_t)(prolSz + jmpSz + jmpSz * neededEntryCount);
 		m_trampoline = (uint64_t) new unsigned char[m_trampolineSz];
 
 		const int64_t delta = m_trampoline - prolStart;
@@ -137,16 +139,18 @@ bool PLH::x86Detour::makeTrampoline(insts_t& prologue, insts_t& trampolineOut) {
 		m_disasm.writeEncoding(jmpToProl, *this);
 	}
 
-	const auto makeJmpFn = [=](uint64_t a, PLH::Instruction& inst) {
+	const auto makeJmpFn = [=](uint64_t& a, PLH::Instruction& inst) {
 		// move inst to trampoline and point instruction to entry
 		auto oldDest = inst.getDestination();
 		inst.setAddress(inst.getAddress() + delta);
 		inst.setDisplacementByDestination(a);
-		
-		return makex86Jmp(a, oldDest);
+
+		const auto& result = makex86Jmp(a, oldDest);
+		a += jmpSz;
+		return result;
 	};
 
-	const uint64_t jmpTblStart = jmpToProlAddr + getJmpSize();
-	trampolineOut = relocateTrampoline(prologue, jmpTblStart, delta, getJmpSize(), makeJmpFn, instsNeedingReloc, instsNeedingEntry);
+	const uint64_t jmpTblStart = jmpToProlAddr + jmpSz;
+	trampolineOut = relocateTrampoline(prologue, jmpTblStart, delta, makeJmpFn, instsNeedingReloc, instsNeedingEntry);
 	return true;
 }

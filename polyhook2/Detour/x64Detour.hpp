@@ -58,6 +58,6 @@ private:
 	RangeAllocator m_allocator;
 };
 
-PLH::insts_t makeJmpX64(uint64_t a, PLH::Instruction &inst, uint64_t &captureAddress, uint8_t destHldrSz, uint64_t trampoline, size_t trampolineSz, int64_t delta, const PLH::MemAccessor& ma);
+PLH::insts_t makeJmpX64(uint64_t& jmpEntryAddr, PLH::Instruction &inst, uint64_t &captureAddress, uint8_t jmpEntrySz, uint8_t destHldrSz, uint64_t trampoline, size_t trampolineSz, int64_t delta, const PLH::MemAccessor& ma);
 }
 #endif //POLYHOOK_2_X64DETOUR_HPP

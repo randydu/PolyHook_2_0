@@ -144,10 +144,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     dis.writeEncoding(jmpToProl, ma);
                 }
 
-                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
                 const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
                 CHECK(tpl == expected);
             }
@@ -182,10 +182,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     dis.writeEncoding(jmpToProl, ma);
                 }
 
-                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
                 const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
                 CHECK(tpl == expected);
             }
@@ -270,10 +270,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     dis.writeEncoding(jmpToProl, ma);
                 }
 
-                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
                 const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
                 CHECK(tpl == expected);
             }
@@ -346,10 +346,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }
@@ -427,10 +427,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }
@@ -541,10 +541,10 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }

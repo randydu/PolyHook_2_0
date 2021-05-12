@@ -45,8 +45,8 @@ T FnCast(void* fnToCast, T pFnCastTo) {
 	return (T)fnToCast;
 }
 
-using MakeJmpFn = std::function<PLH::insts_t(uint64_t, PLH::Instruction&)>;
-PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, PLH::MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, const PLH::MemAccessor& ma); 
+using MakeJmpFn = std::function<PLH::insts_t(uint64_t&, PLH::Instruction&)>;
+PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, PLH::MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, const PLH::MemAccessor& ma); 
 
 //Move these functions outside of class scope for unit-testing
 using CanRelocFn = std::function<bool(const PLH::Instruction&, int64_t delta)>;
@@ -145,8 +145,8 @@ protected:
 							uint64_t& roundProlSz);
 
 
-	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry){
-		return processTrampoline(prologue, jmpTblStart, delta, jmpSz, makeJmp, instsNeedingReloc, instsNeedingEntry, m_disasm, *this);
+	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry){
+		return processTrampoline(prologue, jmpTblStart, delta, makeJmp, instsNeedingReloc, instsNeedingEntry, m_disasm, *this);
 	}
 
 	/**
