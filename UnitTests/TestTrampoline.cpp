@@ -39,7 +39,7 @@ TEMPLATE_TEST_CASE("disp", "[inst]", PLH::CapstoneDisassembler, PLH::ZydisDisass
         uint64_t &target = *(uint64_t *)(code_start + 14);
 
         x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
-        const auto& ma = detour.memAccesor();
+        const auto &ma = detour.memAccesor();
         insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
         auto &inst = prologue[0];
@@ -63,7 +63,7 @@ TEMPLATE_TEST_CASE("disp", "[inst]", PLH::CapstoneDisassembler, PLH::ZydisDisass
             CHECK(inst.getDestination() != target_addr);
 
             dis.writeEncoding(inst, ma);
-            buf.resize(expected.size()); 
+            buf.resize(expected.size());
             CHECK(buf == expected); //inst moved to new location without changing bytes
         }
     }
@@ -74,9 +74,141 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
     TestType dis(Mode::x64);
 
+    constexpr auto max_trampoline_size = 1024;
     constexpr uint8_t destHldrSz = 8;
     constexpr int MINJMPSIZE = 6; // == getMinJmpSize()
 
+    std::vector<uint8_t> tpl(max_trampoline_size);
+    const uint64_t trampoline = (uint64_t)tpl.data();
+
+    SECTION("LEA") {
+        /* 
+        Win8/x64::Kernelbase::FindNextChangeNotification:
+
+        00007FFEF8212A30 | FFF3                     | push rbx                                |
+        00007FFEF8212A32 | 48:83EC 50               | sub rsp,50                              |
+        00007FFEF8212A36 | 48:8D05 E32D0C00         | lea rax,qword ptr ds:[7FFEF82D5820]     | <= LEA
+        00007FFEF8212A3D | BB 01000000              | mov ebx,1                               |
+
+        Win7/x64::Kernelbase::FindNextChangeNotification:
+        000007FEFD332C60 | FFF3                     | push rbx                                |
+        000007FEFD332C62 | 48:83EC 50               | sub rsp,50                              |
+        000007FEFD332C66 | 48:8D05 33DB0200         | lea rax,qword ptr ds:[7FEFD3607A0]      | <= LEA
+        000007FEFD332C6D | BB 01000000              | mov ebx,1                               |
+
+        Win10/x64::Kernelbase::FindNextChangeNotification:
+        00007FFF3A2DCFD0 | 40:53                    | push rbx                                |
+        00007FFF3A2DCFD2 | 48:83EC 50               | sub rsp,50                              |
+        00007FFF3A2DCFD6 | 48:8D05 C3EE2000         | lea rax,qword ptr ds:[7FFF3A4EBEA0]     | <= LEA
+        00007FFF3A2DCFDD | BB 01000000              | mov ebx,1                               |
+        */
+        constexpr int code_size = 13; //prologue size
+
+        std::vector<uint8_t> codes = {
+            0xFF, 0xF3,
+            0x48, 0x83, 0xEC, 0x50,
+            0x48, 0x8D, 0x05, 0xE3, 0x2D, 0x0C, 0x00};
+
+        uint64_t code_start = (uint64_t)codes.data();
+        uint64_t code_end = code_start + code_size;
+
+        x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+        const PLH::MemAccessor &ma{detour.memAccesor()};
+
+        insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+
+        const Instruction &inst = prologue[2];
+        CHECK_FALSE(inst.isBranching());
+        CHECK_FALSE(inst.isCalling());
+        CHECK_FALSE(inst.m_isIndirect);
+        CHECK(inst.isDisplacementRelative());
+
+        const int64_t delta = trampoline - code_start;
+
+        insts_t insts_needing_entry;
+        insts_t insts_needing_reloc;
+
+        //Currently, we cannot fix out-of-2G MOV/relative instuction if it cannot be relocated.
+        CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc) == inst.canRelocate(delta));
+    }
+
+    SECTION("MOV") {
+        //"Win8/x64
+        /*
+        Kernelbase::GetFileAttributesW:
+        00007FFEF81E9190 | FFF7                     | push rdi                                |
+        00007FFEF81E9192 | 48:81EC 90000000         | sub rsp,90                              |
+        00007FFEF81E9199 | 48:8B05 58A90E00         | mov rax,qword ptr ds:[7FFEF82D3AF8]     | <= MOV
+        00007FFEF81E91A0 | 48:33C4                  | xor rax,rsp                             |
+
+        Kernelbase::GetFileTime:
+        00007FFEF8201200 | FFF3                     | push rbx                                |
+        00007FFEF8201202 | 56                       | push rsi                                |
+        00007FFEF8201203 | 57                       | push rdi                                |
+        00007FFEF8201204 | 48:83EC 70               | sub rsp,70                              |
+        00007FFEF8201208 | 48:8B05 E9280D00         | mov rax,qword ptr ds:[7FFEF82D3AF8]     | <= MOV
+        00007FFEF820120F | 48:33C4                  | xor rax,rsp                             |
+
+        Kernelbase::GetFileSizeEx:
+        00007FFEF81E8C30 | FFF3                     | push rbx                                |
+        00007FFEF81E8C32 | 48:83EC 60               | sub rsp,60                              |
+        00007FFEF81E8C36 | 48:8B05 BBAE0E00         | mov rax,qword ptr ds:[7FFEF82D3AF8]     | <= MOV
+        00007FFEF81E8C3D | 48:33C4                  | xor rax,rsp                             |
+
+        Kernelbase::SetFilePointer:
+        00007FFEF81E8690 | FFF3                     | push rbx                                |
+        00007FFEF81E8692 | 56                       | push rsi                                |
+        00007FFEF81E8693 | 57                       | push rdi                                |
+        00007FFEF81E8694 | 48:83EC 70               | sub rsp,70                              |
+        00007FFEF81E8698 | 48:8B05 59B40E00         | mov rax,qword ptr ds:[7FFEF82D3AF8]     | <= MOV
+        00007FFEF81E869F | 48:33C4                  | xor rax,rsp                             |
+        */
+
+        // Win7/x64
+        /*
+        Kernelbase::GetFileInformationByHandle:
+        000007FEFD312AF0 | 4C:8BDC                  | mov r11,rsp                             |
+        000007FEFD312AF3 | 48:81EC 18010000         | sub rsp,118                             |
+        000007FEFD312AFA | 48:8B05 0FD50400         | mov rax,qword ptr ds:[7FEFD360010]      | <= MOV
+        000007FEFD312B01 | 48:33C4                  | xor rax,rsp   
+
+        Kernelbase::GetCurrentDirectoryA:
+        000007FEFD314740 | FFF5                     | push rbp                                |
+        000007FEFD314742 | 56                       | push rsi                                |
+        000007FEFD314743 | 48:81EC 68010000         | sub rsp,168                             |
+        000007FEFD31474A | 48:8B05 BFB80400         | mov rax,qword ptr ds:[7FEFD360010]      | <= MOV
+        000007FEFD314751 | 48:33C4                  | xor rax,rsp                             |
+        */
+
+        constexpr int code_size = 16; //prologue size
+
+        std::vector<uint8_t> codes = {
+            0xFF, 0xF7,
+            0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00,
+            0x48, 0x8B, 0x05, 0x58, 0xA9, 0x0E, 0x00};
+
+        uint64_t code_start = (uint64_t)codes.data();
+        uint64_t code_end = code_start + code_size;
+
+        x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+        const PLH::MemAccessor &ma{detour.memAccesor()};
+
+        insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+
+        const Instruction &inst = prologue[2];
+        CHECK_FALSE(inst.isBranching());
+        CHECK_FALSE(inst.isCalling());
+        CHECK_FALSE(inst.m_isIndirect);
+        CHECK(inst.isDisplacementRelative());
+
+        const int64_t delta = trampoline - code_start;
+
+        insts_t insts_needing_entry;
+        insts_t insts_needing_reloc;
+
+        //Currently, we cannot fix out-of-2G MOV/relative instuction if it cannot be relocated.
+        CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc) == inst.canRelocate(delta));
+    }
     SECTION("Call") {
         SECTION("Indirect Call (0xFF,0x15)") {
             //Win7/x64: BindIoCompletionCallback
@@ -115,7 +247,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
             SECTION("Near (relocation)") {
                 return; //TODO: find a way to test relocation.
-                
+
                 std::vector<uint8_t> expected = {
                     0x48, 0x83, 0xEC, 0x28,             //sub esp, 28h
                     0xFF, 0x15, 0x06, 0x00, 0x00, 0x00, //call qword ptr [rip+6] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
@@ -125,8 +257,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
                 };
 
-                std::vector<uint8_t> tpl(expected.size());
-                const uint64_t trampoline = (uint64_t)tpl.data();
+                tpl.resize(expected.size());
                 const int64_t delta = trampoline - prolStart;
 
                 //fill-in the expected code-end
@@ -163,8 +294,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
                 };
 
-                std::vector<uint8_t> tpl(expected.size());
-                const uint64_t trampoline = (uint64_t)tpl.data();
+                tpl.resize(expected.size());
                 const int64_t delta = trampoline - prolStart;
 
                 //fill-in the expected code-end
@@ -225,7 +355,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
                 };
 
-                std::vector<uint8_t> tpl(expected.size());
+                tpl.resize(expected.size());
 
                 uint64_t code_start = (uint64_t)codes.data();
                 uint64_t code_end = code_start + code_size;
@@ -252,7 +382,6 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
                 const uint64_t prolStart = prologue.front().getAddress();
                 CHECK(prolStart == code_start);
-                const uint64_t trampoline = (uint64_t)tpl.data();
                 const int64_t delta = trampoline - prolStart;
 
                 CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
@@ -294,23 +423,8 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8 //fake jmp target
             };
 
-            std::vector<uint8_t> expected = {
-                0xFF, 0x25, 0x0E, 0x00, 0x00, 0x00, // jmp qword ptr [eip+0Eh] => fake-jmp-target
-                0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-
-                0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+0Eh] => code-end (useless code, left for consistency)
-
-                0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, //fake jmp target
-                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
-            };
-
-            std::vector<uint8_t> tpl(expected.size());
-
             uint64_t code_start = (uint64_t)codes.data();
             uint64_t code_end = code_start + code_size;
-
-            //fill-in the expected code-end
-            *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
 
             x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
             const auto &ma = detour.memAccesor();
@@ -328,30 +442,49 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
             const uint64_t prolStart = prologue.front().getAddress();
             CHECK(prolStart == code_start);
-            const uint64_t trampoline = (uint64_t)tpl.data();
             const int64_t delta = trampoline - prolStart;
 
             CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
-            CHECK(insts_needing_entry.size() == 1);
-            CHECK(insts_needing_reloc.size() == 0);
 
-            const uint16_t prolSz = calcInstsSz(prologue);
-            CHECK(prolSz == code_size);
-            const uint64_t jmpToProlAddr = trampoline + prolSz;
-            auto trampolineSz = tpl.size();
-            const uint8_t destHldrSz = 8;
-            const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
-            {
-                const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, ma);
+            if (inst.canRelocate(delta)) {
+                CHECK(insts_needing_entry.size() == 0);
+                CHECK(insts_needing_reloc.size() == 1);
+
+            } else {
+                CHECK(insts_needing_entry.size() == 1);
+                CHECK(insts_needing_reloc.size() == 0);
+
+                std::vector<uint8_t> expected = {
+                    0xFF, 0x25, 0x0E, 0x00, 0x00, 0x00, // jmp qword ptr [eip+0Eh] => fake-jmp-target
+                    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+
+                    0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+0Eh] => code-end (useless code, left for consistency)
+
+                    0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, //fake jmp target
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
+                };
+
+                //fill-in the expected code-end
+                *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
+
+                const uint16_t prolSz = calcInstsSz(prologue);
+                CHECK(prolSz == code_size);
+                const uint64_t jmpToProlAddr = trampoline + prolSz;
+                auto trampolineSz = tpl.size();
+                const uint8_t destHldrSz = 8;
+                const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
+                {
+                    const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
+                    dis.writeEncoding(jmpToProl, ma);
+                }
+
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
+
+                const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+
+                CHECK(tpl == expected);
             }
-
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, MINJMPSIZE, destHldrSz, trampoline, trampolineSz, delta, ma);
-
-            const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
-
-            CHECK(tpl == expected);
         }
         SECTION("Near- Jmp (0xEB)") {
             /* Win8/x64: kernelbase::UnmapViewOfFile()
@@ -382,7 +515,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
             };
 
-            std::vector<uint8_t> tpl(expected.size());
+            tpl.resize(expected.size());
 
             uint64_t code_start = (uint64_t)codes.data();
             uint64_t code_end = code_start + code_size;
@@ -409,7 +542,6 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
             const uint64_t prolStart = prologue.front().getAddress();
             CHECK(prolStart == code_start);
-            const uint64_t trampoline = (uint64_t)tpl.data();
             const int64_t delta = trampoline - prolStart;
 
             CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
@@ -472,7 +604,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
             };
 
-            std::vector<uint8_t> tpl(expected.size());
+            tpl.resize(expected.size());
 
             uint64_t code_start = (uint64_t)codes.data();
             uint64_t code_end = code_start + code_size;
@@ -523,7 +655,6 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
             const uint64_t prolStart = prologue.front().getAddress();
             CHECK(prolStart == code_start);
-            const uint64_t trampoline = (uint64_t)tpl.data();
             const int64_t delta = trampoline - prolStart;
 
             CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
