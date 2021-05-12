@@ -45,6 +45,16 @@ T FnCast(void* fnToCast, T pFnCastTo) {
 	return (T)fnToCast;
 }
 
+using MakeJmpFn = std::function<PLH::insts_t(uint64_t, PLH::Instruction&)>;
+PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, PLH::MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, const PLH::MemAccessor& ma); 
+
+//Move these functions outside of class scope for unit-testing
+using CanRelocFn = std::function<bool(const PLH::Instruction&, int64_t delta)>;
+
+bool canReloc(const PLH::Instruction& inst, int64_t delta);
+
+bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc, CanRelocFn = canReloc);
+
 class Detour : public PLH::IHook {
 public:
 	Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : m_disasm(dis) {
@@ -135,7 +145,6 @@ protected:
 							uint64_t& roundProlSz);
 
 
-	template<typename MakeJmpFn>
 	PLH::insts_t relocateTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry){
 		return processTrampoline(prologue, jmpTblStart, delta, jmpSz, makeJmp, instsNeedingReloc, instsNeedingEntry, m_disasm, *this);
 	}
@@ -147,43 +156,8 @@ protected:
 	void writeNop(uint64_t base, uint32_t size);
 };
 
-//Move these functions outside of class scope for unit-testing
-using CanRelocFn = std::function<bool(const PLH::Instruction&, int64_t delta)>;
 
-bool canReloc(const PLH::Instruction& inst, int64_t delta);
 
-bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t &instsNeedingEntry, PLH::insts_t &instsNeedingReloc, CanRelocFn = canReloc);
-
-template<typename MakeJmpFn>
-PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, PLH::MemAccessor& ma) {
-	uint64_t jmpTblCurAddr = jmpTblStart;
-	insts_t jmpTblEntries;
-	for (auto& inst : prologue) {
-
-		if (std::find(instsNeedingEntry.begin(), instsNeedingEntry.end(), inst) != instsNeedingEntry.end()) {
-			assert(inst.hasDisplacement());
-			// make an entry pointing to where inst did point to
-			auto entry = makeJmp(jmpTblCurAddr, inst);
-			
-			if(dis.getMode() == Mode::x86 || !inst.m_isIndirect) //x64-indirect-call/jmp instruction does not need a JMP (only needs a dest-holder)
-				jmpTblCurAddr += jmpSz;
-
-			dis.writeEncoding(entry, ma);
-			jmpTblEntries.insert(jmpTblEntries.end(), entry.begin(), entry.end());
-		} else if (std::find(instsNeedingReloc.begin(), instsNeedingReloc.end(), inst) != instsNeedingReloc.end()) {
-			assert(inst.hasDisplacement());
-
-			const uint64_t instsOldDest = inst.getDestination();
-			inst.setAddress(inst.getAddress() + delta);
-			inst.setDestination(instsOldDest);
-		} else {
-			inst.setAddress(inst.getAddress() + delta);
-		}
-
-		dis.writeEncoding(inst, ma);
-	}
-	return jmpTblEntries;
-}
 
 /** Before Hook:                                                After hook:
 *

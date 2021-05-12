@@ -10,13 +10,71 @@
 namespace {
 void dummy() {}
 
+bool no_reloc(const PLH::Instruction &inst, int64_t delta) {
+    return false;
+}
+bool always_reloc(const PLH::Instruction &inst, int64_t delta) {
+    return true;
+}
+
 } // namespace
+
+TEMPLATE_TEST_CASE("disp", "[inst]", PLH::CapstoneDisassembler, PLH::ZydisDisassembler) {
+    using namespace PLH;
+
+    TestType dis(Mode::x64);
+
+    SECTION("Indirect Call (0xFF,0x15)") {
+        constexpr uint64_t target_addr = 0x776DCE00; //call-target
+        constexpr int code_size = 6;
+
+        std::vector<uint8_t> codes = {
+            0xFF, 0x15, 0x08, 0x00, 0x00, 0x00,             //call qword ptr [rip+8] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
+            '*', '*', '*', '*', '*', '*', '*', '*',         //<== code-end
+            0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
+        };
+
+        uint64_t code_start = (uint64_t)codes.data();
+        uint64_t code_end = code_start + code_size;
+        uint64_t &target = *(uint64_t *)(code_start + 14);
+
+        x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+        const auto& ma = detour.memAccesor();
+        insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+
+        auto &inst = prologue[0];
+
+        SECTION("Check destionation settor/gettor consistency") {
+            const uint64_t new_target = 0x1122334455667788;
+            CHECK(inst.getDestination() == target_addr);
+            CHECK_NOTHROW(inst.setDestination(new_target, ma));
+            CHECK(inst.getDestination() == new_target);
+            CHECK(target == new_target); //the content of indirect qword is updated.
+
+            CHECK_NOTHROW(inst.setDestination(target_addr, ma)); //rollback
+        }
+
+        SECTION("Move Inst to new location") {
+            std::vector<uint8_t> expected = {0xFF, 0x15, 0x08, 0x00, 0x00, 0x00};
+            std::vector<uint8_t> buf(codes.size());
+
+            const uint64_t new_addr = (uint64_t)buf.data();
+            inst.setAddress(new_addr);
+            CHECK(inst.getDestination() != target_addr);
+
+            dis.writeEncoding(inst, ma);
+            buf.resize(expected.size()); 
+            CHECK(buf == expected); //inst moved to new location without changing bytes
+        }
+    }
+}
 
 TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassembler, PLH::ZydisDisassembler) {
     using namespace PLH;
 
     TestType dis(Mode::x64);
 
+    constexpr uint8_t destHldrSz = 8;
     constexpr int MINJMPSIZE = 6; // == getMinJmpSize()
 
     SECTION("Call") {
@@ -32,24 +90,12 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
                 0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
             };
 
-            std::vector<uint8_t> expected = {
-                0x48, 0x83, 0xEC, 0x28,             //sub esp, 28h
-                0xFF, 0x15, 0x06, 0x00, 0x00, 0x00, //call qword ptr [rip+6] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
-                0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+8] => code-end
-
-                0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
-                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
-            };
-
-            std::vector<uint8_t> tpl(expected.size());
-
             uint64_t code_start = (uint64_t)codes.data();
             uint64_t code_end = code_start + code_size;
 
-            //fill-in the expected code-end
-            *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
-
             x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+            const PLH::MemAccessor &ma{detour.memAccesor()};
+
             insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
             const Instruction &inst = prologue[1];
@@ -64,38 +110,87 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 
             const uint64_t prolStart = prologue.front().getAddress();
             CHECK(prolStart == code_start);
-            const uint64_t trampoline = (uint64_t)tpl.data();
-            const int64_t delta = trampoline - prolStart;
-
-            CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
-            CHECK(insts_needing_entry.size() == 1);
-            CHECK(insts_needing_reloc.size() == 0);
-
             const uint16_t prolSz = calcInstsSz(prologue);
             CHECK(prolSz == code_size);
-            const uint64_t jmpToProlAddr = trampoline + prolSz;
-            auto trampolineSz = tpl.size();
-            const uint8_t destHldrSz = 8;
-            const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
-            {
-                const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, detour);
+
+            SECTION("Near (relocation)") {
+                return; //TODO: find a way to test relocation.
+                
+                std::vector<uint8_t> expected = {
+                    0x48, 0x83, 0xEC, 0x28,             //sub esp, 28h
+                    0xFF, 0x15, 0x06, 0x00, 0x00, 0x00, //call qword ptr [rip+6] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
+                    0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+8] => code-end
+
+                    0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
+                };
+
+                std::vector<uint8_t> tpl(expected.size());
+                const uint64_t trampoline = (uint64_t)tpl.data();
+                const int64_t delta = trampoline - prolStart;
+
+                //fill-in the expected code-end
+                *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
+
+                CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc, always_reloc));
+                CHECK(insts_needing_entry.size() == 0);
+                CHECK(insts_needing_reloc.size() == 1);
+
+                const uint64_t jmpToProlAddr = trampoline + prolSz;
+                auto trampolineSz = tpl.size();
+                const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
+                {
+                    const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
+                    dis.writeEncoding(jmpToProl, ma);
+                }
+
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+
+                const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+
+                CHECK(tpl == expected);
             }
 
-            // each jmp tbl entries holder is one slot down from the previous (lambda holds state)
-            //const auto makeJmpFn = [=, captureAddress = jmpHolderCurAddr](uint64_t a, PLH::Instruction &inst) mutable {
-            //    return makeJmp(a, inst, captureAddress, destHldrSz, trampoline, trampolineSz, delta);
-            //};
+            SECTION("Far (No relocation)") {
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta);
+                std::vector<uint8_t> expected = {
+                    0x48, 0x83, 0xEC, 0x28,             //sub esp, 28h
+                    0xFF, 0x15, 0x06, 0x00, 0x00, 0x00, //call qword ptr [rip+6] => 0x776DCE00 (ntdll::RtlSetIoCompletionCallback)
+                    0xFF, 0x25, 0x08, 0x00, 0x00, 0x00, //jmp qword ptr [rip+8] => code-end
 
-            const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
+                    0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //target
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
+                };
 
-            CHECK(tpl == expected);
-        }
-        SECTION("Relative Call (0xE8)") {
-            /* entry of an api callback
+                std::vector<uint8_t> tpl(expected.size());
+                const uint64_t trampoline = (uint64_t)tpl.data();
+                const int64_t delta = trampoline - prolStart;
+
+                //fill-in the expected code-end
+                *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
+
+                CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc, no_reloc));
+                CHECK(insts_needing_entry.size() == 1);
+                CHECK(insts_needing_reloc.size() == 0);
+
+                const uint64_t jmpToProlAddr = trampoline + prolSz;
+                auto trampolineSz = tpl.size();
+                const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
+                {
+                    const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
+                    dis.writeEncoding(jmpToProl, ma);
+                }
+
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+
+                const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+
+                CHECK(tpl == expected);
+            }
+            SECTION("Relative Call (0xE8)") {
+                /* entry of an api callback
 			00007FF7C647014C 40 53                push        rbx  
 			00007FF7C647014E 56                   push        rsi  
 			00007FF7C647014F 57                   push        rdi  
@@ -103,83 +198,85 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
 			00007FF7C6470154 48 8B F9             mov         rdi,rcx  
 			00007FF7C6470157 E8 4C 2D FF FF       call        vm::settings::debug_hooked_api (07FF7C6462EA8h)
 			*/
-            constexpr int code_size = 16; //prologue size (INPLACE scheme)
+                constexpr int code_size = 16; //prologue size (INPLACE scheme)
 
-            std::vector<uint8_t> codes = {
-                0x40, 0x53,
-                0x56,
-                0x57,
-                0x48, 0x83, 0xEC, 0x30,
-                0x48, 0x8B, 0xF9,
-                0xE8, 0x4C, 0x2D, 0xFF, 0xFF,
-                '*', '*', '*', '*', '*', '*', '*', '*', //<== code-end
-            };
+                std::vector<uint8_t> codes = {
+                    0x40, 0x53,
+                    0x56,
+                    0x57,
+                    0x48, 0x83, 0xEC, 0x30,
+                    0x48, 0x8B, 0xF9,
+                    0xE8, 0x4C, 0x2D, 0xFF, 0xFF,
+                    '*', '*', '*', '*', '*', '*', '*', '*', //<== code-end
+                };
 
-            std::vector<uint8_t> expected = {
-                0x40, 0x53,
-                0x56,
-                0x57,
-                0x48, 0x83, 0xEC, 0x30,
-                0x48, 0x8B, 0xF9,
-                0xE8, 0x06, 0x00, 0x00, 0x00, // call eip+6 => local jmp => call-target
+                std::vector<uint8_t> expected = {
+                    0x40, 0x53,
+                    0x56,
+                    0x57,
+                    0x48, 0x83, 0xEC, 0x30,
+                    0x48, 0x8B, 0xF9,
+                    0xE8, 0x06, 0x00, 0x00, 0x00, // call eip+6 => local jmp => call-target
 
-                0xFF, 0x25, 0x0E, 0x00, 0x00, 0x00, //jmp qword ptr [rip+0Eh] => code-end
-                0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, // jmp [eip+0]
+                    0xFF, 0x25, 0x0E, 0x00, 0x00, 0x00, //jmp qword ptr [rip+0Eh] => code-end
+                    0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, // jmp [eip+0]
 
-                0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //call-target, to be filled manually
-                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
-            };
+                    0x00, 0xCE, 0x6D, 0x77, 0x00, 0x00, 0x00, 0x00, //call-target, to be filled manually
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, //code-end, to be filled manually
+                };
 
-            std::vector<uint8_t> tpl(expected.size());
+                std::vector<uint8_t> tpl(expected.size());
 
-            uint64_t code_start = (uint64_t)codes.data();
-            uint64_t code_end = code_start + code_size;
+                uint64_t code_start = (uint64_t)codes.data();
+                uint64_t code_end = code_start + code_size;
 
-            //fill-in the expected code-end
-            *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
+                //fill-in the expected code-end
+                *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
 
-            uint64_t call_target = (uint64_t)(codes.data() + 16 + (int32_t)0xFFFF2D4C); // E8 4C 2D FF FF
-            *(uint64_t *)(expected.data() + expected.size() - 16) = call_target;
+                uint64_t call_target = (uint64_t)(codes.data() + 16 + (int32_t)0xFFFF2D4C); // E8 4C 2D FF FF
+                *(uint64_t *)(expected.data() + expected.size() - 16) = call_target;
 
-            x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
-            insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
+                x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+                const auto &ma = detour.memAccesor();
+                insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
-            const Instruction &inst = prologue[5];
-            CHECK(inst.isBranching());
-            CHECK(inst.isCalling());
-            CHECK_FALSE(inst.m_isIndirect);
-            CHECK(inst.isDisplacementRelative());
-            CHECK(inst.getDestination() == call_target);
+                const Instruction &inst = prologue[5];
+                CHECK(inst.isBranching());
+                CHECK(inst.isCalling());
+                CHECK_FALSE(inst.m_isIndirect);
+                CHECK(inst.isDisplacementRelative());
+                CHECK(inst.getDestination() == call_target);
 
-            insts_t insts_needing_entry;
-            insts_t insts_needing_reloc;
+                insts_t insts_needing_entry;
+                insts_t insts_needing_reloc;
 
-            const uint64_t prolStart = prologue.front().getAddress();
-            CHECK(prolStart == code_start);
-            const uint64_t trampoline = (uint64_t)tpl.data();
-            const int64_t delta = trampoline - prolStart;
+                const uint64_t prolStart = prologue.front().getAddress();
+                CHECK(prolStart == code_start);
+                const uint64_t trampoline = (uint64_t)tpl.data();
+                const int64_t delta = trampoline - prolStart;
 
-            CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
-            CHECK(insts_needing_entry.size() == 1);
-            CHECK(insts_needing_reloc.size() == 0);
+                CHECK(buildRelocationList(prologue, code_size, delta, insts_needing_entry, insts_needing_reloc));
+                CHECK(insts_needing_entry.size() == 1);
+                CHECK(insts_needing_reloc.size() == 0);
 
-            const uint16_t prolSz = calcInstsSz(prologue);
-            CHECK(prolSz == code_size);
-            const uint64_t jmpToProlAddr = trampoline + prolSz;
-            auto trampolineSz = tpl.size();
-            const uint8_t destHldrSz = 8;
-            const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
-            {
-                const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, detour);
+                const uint16_t prolSz = calcInstsSz(prologue);
+                CHECK(prolSz == code_size);
+                const uint64_t jmpToProlAddr = trampoline + prolSz;
+                auto trampolineSz = tpl.size();
+                const uint8_t destHldrSz = 8;
+                const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
+                {
+                    const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
+                    dis.writeEncoding(jmpToProl, ma);
+                }
+
+                const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
+
+                const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
+                insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
+
+                CHECK(tpl == expected);
             }
-
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta);
-
-            const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
-
-            CHECK(tpl == expected);
         }
     }
     SECTION("Jmp") {
@@ -216,6 +313,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             *(uint64_t *)(expected.data() + expected.size() - 8) = code_end;
 
             x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+            const auto &ma = detour.memAccesor();
             insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
             const Instruction &inst = prologue[0];
@@ -245,13 +343,13 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
             {
                 const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, detour);
+                dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }
@@ -296,6 +394,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             *(uint64_t *)(expected.data() + expected.size() - 16) = jmp_target;
 
             x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+            const auto &ma = detour.memAccesor();
             insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
             const Instruction &inst = prologue[1];
@@ -325,13 +424,13 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
             {
                 const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, detour);
+                dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }
@@ -391,6 +490,7 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             *(uint64_t *)(expected.data() + expected.size() - 32) = JMP_target;
 
             x64Detour detour(code_start, (uint64_t)&dummy, nullptr, dis);
+            const auto &ma = detour.memAccesor();
             insts_t prologue = dis.disassemble(code_start, code_start, code_end, detour);
 
             {
@@ -438,13 +538,13 @@ TEMPLATE_TEST_CASE("Trampoline", "[x64Detour],[ADetour]", PLH::CapstoneDisassemb
             const uint64_t jmpHolderCurAddr = (trampoline + trampolineSz - destHldrSz);
             {
                 const auto jmpToProl = makex64MinimumJump(jmpToProlAddr, prologue.front().getAddress() + prolSz, jmpHolderCurAddr);
-                dis.writeEncoding(jmpToProl, detour);
+                dis.writeEncoding(jmpToProl, ma);
             }
 
-            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta);
+            const auto makeJmpFn = std::bind(makeJmpX64, _1, _2, jmpHolderCurAddr, destHldrSz, trampoline, trampolineSz, delta, ma);
 
             const uint64_t jmpTblStart = jmpToProlAddr + MINJMPSIZE;
-            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, detour);
+            insts_t trampolineOut = processTrampoline(prologue, jmpTblStart, delta, MINJMPSIZE, makeJmpFn, insts_needing_reloc, insts_needing_entry, dis, ma);
 
             CHECK(tpl == expected);
         }

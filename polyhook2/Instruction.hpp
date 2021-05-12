@@ -16,6 +16,8 @@
 
 #include "polyhook2/UID.hpp"
 #include "polyhook2/Enums.hpp"
+#include "polyhook2/MemProtector.hpp"
+
 namespace PLH {
 class Instruction {
 public:
@@ -80,13 +82,45 @@ public:
 		return dest;
 	}
 
-	void setDestination(const uint64_t dest) {
+	//Change branching destionation
+	//For indirect call/jmp, the content of memory pointer is modified to the destination, the displacement is not changed.
+	//otherwise, the instrunction's displacement is adjusted according to the new destination.
+	void setDestination(const uint64_t dest, const PLH::MemAccessor& ma) {
+		if (!hasDisplacement())
+			return;
+
+		if (isDisplacementRelative()) {
+			if(m_isIndirect){
+				auto pdest = m_address + m_displacement.Relative + size();
+				PLH::MemoryProtector prot(pdest, m_mode == Mode::x64 ? 8 : 4, ProtFlag::W, ma);
+				if (m_mode == Mode::x64) {
+					*(uint64_t*)pdest = dest;
+				} else {
+					*(uint32_t*)pdest = dest;
+				}
+			} else {
+				int64_t newRelativeDisp = calculateRelativeDisplacement<int64_t>(
+					getAddress(),
+					dest,
+					(uint8_t)size());
+
+				setRelativeDisplacement(newRelativeDisp);
+			}
+			return;
+		}
+		setAbsoluteDisplacement(dest);
+	}
+
+	//Adjust displacement by destionation
+	//For indirect instruction, dest is the address of memory location pointing to final destionation.
+	//Otherwise, the dest is the branching target.
+	void setDisplacementByDestination(const uint64_t dest) {
 		if (!hasDisplacement())
 			return;
 
 		if (isDisplacementRelative()) {
 			int64_t newRelativeDisp = calculateRelativeDisplacement<int64_t>(
-				getAddress(),
+				m_address,
 				dest,
 				(uint8_t)size());
 
@@ -94,6 +128,39 @@ public:
 			return;
 		}
 		setAbsoluteDisplacement(dest);
+	}
+
+	//Can we relocate to the new memory location?
+	bool canRelocate(int64_t delta) const {
+		if(m_isIndirect){
+			//current dest-pointer
+			auto pdest = m_address + m_displacement.Relative + size();
+			auto new_delta = m_address + delta + size() - pdest;
+			//can we still access the dest-pointer after relocation?
+			return (uint64_t)std::llabs(new_delta) <= getMaxDisp();
+		}
+		return (uint64_t)std::llabs(delta) <= getMaxDisp();
+	}
+
+	//Relocate to the new memory location, keeping the destination untouched.
+	//throw exception if fails.
+	void relocate(int64_t delta){
+		assert(canRelocate(delta));
+
+		if(m_isIndirect){
+			auto pdest = m_address + m_displacement.Relative + size();
+			m_address += delta;
+			setDisplacementByDestination(pdest);
+		} else {
+			const uint64_t instsOldDest = getDestination();
+			m_address += delta;
+			setDisplacementByDestination(instsOldDest);
+		}
+	}
+
+	uint64_t getMaxDisp() const {
+		const uint8_t dispSzBits = (uint8_t)getDispSize() * 8;
+		return (uint64_t)(std::pow(2, dispSzBits) / 2.0 - 1.0); // 2^bitSz give max val, /2 and -1 because signed ex (int8_t [-128, 127] = [2^8 / 2, 2^8 / 2 - 1]
 	}
 
 	/**Get the address of the instruction in memory**/

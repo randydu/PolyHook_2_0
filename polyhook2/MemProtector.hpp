@@ -29,7 +29,7 @@ ProtFlag TranslateProtection(const int prot);
 
 class MemoryProtector {
 public:
-	MemoryProtector(const uint64_t address, const uint64_t length, const PLH::ProtFlag prot, MemAccessor& accessor, bool unsetOnDestroy = true) : m_accessor(accessor) {
+	MemoryProtector(const uint64_t address, const uint64_t length, const PLH::ProtFlag prot, const MemAccessor& accessor, bool unsetOnDestroy = true) : m_accessor(accessor) {
 		m_address = address;
 		m_length = length;
 		unsetLater = unsetOnDestroy;
@@ -54,7 +54,7 @@ public:
 	}
 private:
 	PLH::ProtFlag m_origProtection;
-	MemAccessor& m_accessor;
+	const MemAccessor& m_accessor;
 
 	uint64_t m_address;
 	uint64_t m_length;

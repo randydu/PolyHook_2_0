@@ -62,6 +62,10 @@ public:
 		m_debugSet = state;
 	}
 
+	const MemAccessor& memAccesor() const {
+		return *this;
+	}
+
 protected:
 	bool m_debugSet;
 	bool m_hooked;

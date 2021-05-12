@@ -128,20 +128,13 @@ bool PLH::Detour::expandProlSelfJmps(insts_t& prol,
 	return true;
 }
 
-namespace {
+namespace PLH {
 
-uint64_t getMaxInstDisp(const PLH::Instruction& inst){
-	const uint8_t dispSzBits = (uint8_t)inst.getDispSize() * 8;
-	return (uint64_t)(std::pow(2, dispSzBits) / 2.0 - 1.0); // 2^bitSz give max val, /2 and -1 because signed ex (int8_t [-128, 127] = [2^8 / 2, 2^8 / 2 - 1]
+bool canReloc(const PLH::Instruction& inst, int64_t delta){
+	return inst.canRelocate(delta);
 }
 
-}
-
-bool PLH::canReloc(const PLH::Instruction& inst, int64_t delta){
-	return (uint64_t)std::llabs(delta) <= getMaxInstDisp(inst);
-}
-
-bool PLH::buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t& instsNeedingEntry, PLH::insts_t& instsNeedingReloc, CanRelocFn canRelocFn) {
+bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const int64_t delta, PLH::insts_t& instsNeedingEntry, PLH::insts_t& instsNeedingReloc, CanRelocFn canRelocFn) {
 	assert(instsNeedingEntry.size() == 0);
 	assert(instsNeedingReloc.size() == 0);
 	assert(prologue.size() > 0);
@@ -176,7 +169,7 @@ bool PLH::buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, con
 				with asmjit and insert it at position
 				*/
 				std::string err = "Cannot fixup IP relative data operation, needed disp. beyond max disp range: " + inst.getFullName() +
-					" needed: " + int_to_hex((uint64_t)std::llabs(delta)) + " raw: " + int_to_hex(delta) +  " max: " + int_to_hex(getMaxInstDisp(inst));
+					" needed: " + int_to_hex((uint64_t)std::llabs(delta)) + " raw: " + int_to_hex(delta) +  " max: " + int_to_hex(inst.getMaxDisp());
 				Log::log(err, ErrorLevel::SEV);
 				return false;
 			}else {
@@ -221,3 +214,33 @@ bool PLH::Detour::reHook()
 	writeNop(m_fnAddress + m_nopProlOffset, m_nopSize);
 	return true;
 }
+
+PLH::insts_t processTrampoline(insts_t& prologue, uint64_t jmpTblStart, const int64_t delta, const uint8_t jmpSz, PLH::MakeJmpFn makeJmp, const PLH::insts_t& instsNeedingReloc, const PLH::insts_t& instsNeedingEntry, PLH::ADisassembler& dis, const PLH::MemAccessor& ma) {
+	uint64_t jmpTblCurAddr = jmpTblStart;
+	insts_t jmpTblEntries;
+	for (auto& inst : prologue) {
+
+		if (std::find(instsNeedingEntry.begin(), instsNeedingEntry.end(), inst) != instsNeedingEntry.end()) {
+			assert(inst.hasDisplacement());
+			// make an entry pointing to where inst did point to
+			auto entry = makeJmp(jmpTblCurAddr, inst);
+			
+			if(dis.getMode() == Mode::x86 || !inst.m_isIndirect) //x64-indirect-call/jmp instruction does not need a JMP (only needs a dest-holder)
+				jmpTblCurAddr += jmpSz;
+
+			dis.writeEncoding(entry, ma);
+			jmpTblEntries.insert(jmpTblEntries.end(), entry.begin(), entry.end());
+		} else if (std::find(instsNeedingReloc.begin(), instsNeedingReloc.end(), inst) != instsNeedingReloc.end()) {
+			assert(inst.hasDisplacement());
+
+			inst.relocate(delta);
+		} else {
+			inst.setAddress(inst.getAddress() + delta);
+		}
+
+		dis.writeEncoding(inst, ma);
+	}
+	return jmpTblEntries;
+}
+
+}//namespace PLH
