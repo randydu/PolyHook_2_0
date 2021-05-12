@@ -147,16 +147,11 @@ bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const in
 			(inst.getDestination() < prolStart ||
 			inst.getDestination() > prolStart + roundProlSz)) {
 
-            //call or indirect-jmp always needs an entry (only a dest-holder for indirect-call/jmp, otherwise both a min-jmp and dest-holder are needed as normal)
-            if(inst.isCalling()||inst.m_isIndirect){
+			// can inst just be re-encoded or do we need a tbl entry
+			if (!canRelocFn(inst, delta)){
 				instsNeedingEntry.push_back(inst);
-			}else{
-				// can inst just be re-encoded or do we need a tbl entry
-				if (!canRelocFn(inst, delta)){
-					instsNeedingEntry.push_back(inst);
-				} else {
-					instsNeedingReloc.push_back(inst);
-				}
+			} else {
+				instsNeedingReloc.push_back(inst);
 			}
 		}
 
