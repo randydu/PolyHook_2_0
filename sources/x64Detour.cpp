@@ -8,6 +8,7 @@
 #include "polyhook2/Detour/x64Detour.hpp"
 #include "polyhook2/Misc.hpp"
 #include "polyhook2/MemProtector.hpp"
+#include "polyhook2/PE/PEB.hpp"
 
 PLH::x64Detour::x64Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis) : PLH::Detour(fnAddress, fnCallback, userTrampVar, dis), m_allocator(8, 100) {
 
@@ -45,8 +46,111 @@ void PLH::x64Detour::setDetourScheme(detour_scheme_t scheme){
 	_detourScheme = scheme;
 }
 
+namespace {	
+
+	struct gc_t {
+		uint64_t begin;
+		uint64_t end;
+		uint64_t pos; //current available position
+
+		uint64_t alloc(uint16_t size){
+			if(pos + size <= end){
+                auto i = begin + pos; 
+				pos += size;
+				return i;
+			}
+			return 0; //fails
+		}
+	};
+
+	using gsc_t = std::vector<gc_t>;
+
+	struct module_t {
+		uint64_t begin;
+		uint64_t end;
+		gsc_t gcs;
+
+		module_t(uint64_t b, uint64_t e):begin(b), end(e){}
+		bool has(uint64_t addr) const {
+			return addr >= begin && addr < end;
+		}
+
+		uint64_t alloc(uint16_t size){
+			for(auto& gc: gcs){
+				if(auto found = gc.alloc(size); found)
+					return found;
+			}
+			return 0; //fails
+		}
+	};
+
+	std::vector<std::shared_ptr<module_t>> modules;
+
+	bool parseModule(std::shared_ptr<module_t> md){
+		uint64_t moduleBase = md->begin;
+
+		IMAGE_DOS_HEADER* pImg = (IMAGE_DOS_HEADER*)moduleBase;
+		if(pImg->e_magic != IMAGE_DOS_SIGNATURE) return false; //Invalid pe header
+		
+		IMAGE_NT_HEADERS64* pNtHdr = (IMAGE_NT_HEADERS64*)(moduleBase + pImg->e_lfanew);
+		if(pNtHdr->Signature != IMAGE_NT_SIGNATURE) return false; //Invalid NT header
+		if(pNtHdr->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return false; //Invalid PE64 image
+
+		IMAGE_SECTION_HEADER* pSec = (IMAGE_SECTION_HEADER*)(pNtHdr + 1); 
+		int N = pNtHdr->FileHeader.NumberOfSections;
+		for(int i = 0; i < N; i++, pSec++){
+			char name[IMAGE_SIZEOF_SHORT_NAME + 1]{0};
+			memcpy(name, &pSec->Name[0], IMAGE_SIZEOF_SHORT_NAME);
+
+			if(strcmp(name, ".reloc") == 0){//.reloc section is useless after loading.
+				md->gcs.push_back({
+					moduleBase + pSec->VirtualAddress, //begin
+					i == N-1 ? md->end : (moduleBase + (pSec+1)->VirtualAddress), //end
+					0
+				});
+			}
+		}
+		return true;
+	}
+
+	void initModuleList(){
+		if(!modules.empty()) return; //already initialized
+
+		PEB* peb = (PPEB)__readgsqword(0x60);
+
+		PEB_LDR_DATA* ldr = (PPEB_LDR_DATA)peb->Ldr;
+
+		// find loaded module from peb
+		for (auto* dte = (LDR_DATA_TABLE_ENTRY*)ldr->InLoadOrderModuleList.Flink;
+			dte->DllBase != NULL;
+			dte = (LDR_DATA_TABLE_ENTRY*)dte->InLoadOrderLinks.Flink) {
+				uint64_t dllBase = (uint64_t)dte->DllBase;
+				auto module = std::make_shared<module_t>(dllBase, dllBase + dte->SizeOfImage);
+				if(parseModule(module))
+					modules.push_back(module);
+		}
+	}
+
+	uint64_t findCodeCaveInModule(uint64_t addr, uint16_t size){
+		initModuleList();
+
+		//find the module
+		for(auto& m: modules){
+			if(m->has(addr)){
+				if(auto found = m->alloc(size); found)
+					return found;
+			}
+		}
+		return 0;
+	}
+}
+
 template<uint16_t SIZE>
 std::optional<uint64_t> PLH::x64Detour::findNearestCodeCave(uint64_t addr) {
+	//First search in loaded PE modules.
+	if(auto found = findCodeCaveInModule(addr, SIZE); found)
+		return found;
+
 	const uint64_t chunkSize = 64000;
 	unsigned char* data = new unsigned char[chunkSize];
 	auto delete_data = finally([=]() {
