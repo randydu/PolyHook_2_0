@@ -107,6 +107,20 @@ public:
 	}
 
 	virtual Mode getArchType() const = 0;
+
+	static constexpr int FOLLOW_JMP_MAX_PATH = 10;
+
+	int getFollowJmpMaxDepth() const {
+		return m_followJmpMaxDepth;
+	}
+	//set to 0 to disable follow-jmp feature.
+	void setFollowJmpMaxDepth(int v){
+		m_followJmpMaxDepth = v;
+	}
+	//get current follow depth
+	int getFollowJmpDepth() const {
+		return m_curDepth;
+	}
 protected:
 	uint64_t                m_fnAddress;
 	uint64_t                m_fnCallback;
@@ -125,6 +139,9 @@ protected:
 	uint16_t                m_nopSize;
 	uint32_t                m_hookSize;
 
+	int 					m_curDepth {0}; //current follow-jmp depth
+	int 					m_followJmpMaxDepth {FOLLOW_JMP_MAX_PATH}; //enable follow-jmp feature, ON by default for backward compatibility
+
 	/**Walks the given vector of instructions and sets roundedSz to the lowest size possible that doesn't split any instructions and is greater than minSz.
 	If end of function is encountered before this condition an empty optional is returned. Returns instructions in the range start to adjusted end**/
 	std::optional<insts_t> calcNearestSz(const insts_t& functionInsts, const uint64_t minSz,
@@ -133,7 +150,7 @@ protected:
 	/**If function starts with a jump follow it until the first non-jump instruction, recursively. This handles already hooked functions
 	and also compilers that emit jump tables on function call. Returns true if resolution was successful (nothing to resolve, or resolution worked),
 	false if resolution failed.**/
-	bool followJmp(insts_t& functionInsts, const uint8_t curDepth = 0, const uint8_t depth = 5);
+	bool followJmp(insts_t& functionInsts);
 
 	/**Expand the prologue up to the address of the last jmp that points back into the prologue. This
 	is necessary because we modify the location of things in the prologue, so re-entrant jmps point

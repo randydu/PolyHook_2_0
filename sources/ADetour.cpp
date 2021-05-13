@@ -33,14 +33,14 @@ std::optional<PLH::insts_t> PLH::Detour::calcNearestSz(const PLH::insts_t& funct
 	return std::nullopt;
 }
 
-bool PLH::Detour::followJmp(PLH::insts_t& functionInsts, const uint8_t curDepth, const uint8_t depth) {
-	if (functionInsts.size() <= 0) {
-		Log::log("Couldn't decompile instructions at followed jmp", ErrorLevel::WARN);
-		return false;
+bool PLH::Detour::followJmp(PLH::insts_t& functionInsts) {
+	if (m_curDepth >= m_followJmpMaxDepth) {
+		Log::log("Prologue jmp resolution hit max depth, follow stopped.", ErrorLevel::WARN);
+		return true;
 	}
 
-	if (curDepth >= depth) {
-		Log::log("Prologue jmp resolution hit max depth, prologue too deep", ErrorLevel::WARN);
+	if (functionInsts.size() <= 0) {
+		Log::log("Couldn't decompile instructions at followed jmp", ErrorLevel::WARN);
 		return false;
 	}
 
@@ -57,7 +57,8 @@ bool PLH::Detour::followJmp(PLH::insts_t& functionInsts, const uint8_t curDepth,
 
 	uint64_t dest = functionInsts.front().getDestination();
 	functionInsts = m_disasm.disassemble(dest, dest, dest + 100, *this);
-	return followJmp(functionInsts, curDepth + 1); // recurse
+	++m_curDepth;
+	return followJmp(functionInsts); // recurse
 }
 
 void PLH::Detour::writeNop(uint64_t base, uint32_t size) {
