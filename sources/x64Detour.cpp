@@ -66,11 +66,12 @@ namespace {
 	using gsc_t = std::vector<gc_t>;
 
 	struct module_t {
+		std::wstring_view name;
 		uint64_t begin;
 		uint64_t end;
 		gsc_t gcs;
 
-		module_t(uint64_t b, uint64_t e):begin(b), end(e){}
+		module_t(const std::wstring_view& nm, uint64_t b, uint64_t e):name(nm), begin(b), end(e){}
 		bool has(uint64_t addr) const {
 			return addr >= begin && addr < end;
 		}
@@ -102,12 +103,21 @@ namespace {
 			char name[IMAGE_SIZEOF_SHORT_NAME + 1]{0};
 			memcpy(name, &pSec->Name[0], IMAGE_SIZEOF_SHORT_NAME);
 
+			auto begin = moduleBase + pSec->VirtualAddress;
+			auto end = i == N-1 ? md->end : (moduleBase + (pSec+1)->VirtualAddress);
+
 			if(strcmp(name, ".reloc") == 0){//.reloc section is useless after loading.
-				md->gcs.push_back({
-					moduleBase + pSec->VirtualAddress, //begin
-					i == N-1 ? md->end : (moduleBase + (pSec+1)->VirtualAddress), //end
-					0
-				});
+				printf("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin, end, end - begin);
+				md->gcs.push_back({ begin, end, 0 });
+			} else {
+				//reuse gap between sections if possible
+				auto vsize = std::max(pSec->SizeOfRawData, pSec->Misc.VirtualSize);
+				if(begin + vsize < end){
+					printf("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin + vsize, end, end - begin -vsize);
+					md->gcs.push_back({
+						begin + vsize, end, 0
+					});
+				}
 			}
 		}
 		return true;
@@ -125,10 +135,26 @@ namespace {
 			dte->DllBase != NULL;
 			dte = (LDR_DATA_TABLE_ENTRY*)dte->InLoadOrderLinks.Flink) {
 				uint64_t dllBase = (uint64_t)dte->DllBase;
-				auto module = std::make_shared<module_t>(dllBase, dllBase + dte->SizeOfImage);
+				std::wstring_view nm(dte->BaseDllName.Buffer, dte->BaseDllName.Length);
+				auto module = std::make_shared<module_t>(nm, dllBase, dllBase + dte->SizeOfImage);
 				if(parseModule(module))
 					modules.push_back(module);
 		}
+
+		int N = modules.size();
+		int sum = 0;
+		printf("******** GC Sumamry ********\n");
+		printf("Total modules: %d\n\n", N);
+		for(int i = 0; i < N; i++){
+			const auto& md = *modules[i];
+			int j = 0;
+			for(const auto& gc: md.gcs){
+				j += (gc.end - gc.pos - gc.begin);
+			}
+			sum += j;
+			printf("[%d/%d] [%I64X, %I64X) %ls: total free bytes = %d\n", i, N, md.begin, md.end, md.name.data(), j);
+		}
+		printf("\nTotal free bytes: %d\n\n", sum);
 	}
 
 	uint64_t findCodeCaveInModule(uint64_t addr, uint16_t size){
