@@ -54,12 +54,22 @@ namespace {
 		uint64_t pos; //current available position
 
 		uint64_t alloc(uint16_t size){
-			if(pos + size <= end){
-                auto i = begin + pos; 
+			auto addr = begin + pos;
+			if(addr + size <= end){
 				pos += size;
-				return i;
+				return addr;
 			}
 			return 0; //fails
+		}
+		
+		//allocate inside range [low, high)
+		uint64_t allocInRange(uint64_t low, uint64_t high, uint16_t size){
+			auto addr = begin + pos;
+			if(addr >= low && addr < high && addr + size <= end){
+				pos += size;
+				return addr;
+			}
+			return 0;
 		}
 	};
 
@@ -74,6 +84,18 @@ namespace {
 		module_t(const std::wstring_view& nm, uint64_t b, uint64_t e):name(nm), begin(b), end(e){}
 		bool has(uint64_t addr) const {
 			return addr >= begin && addr < end;
+		}
+
+		uint64_t allocWithin2G(uint64_t addr, uint16_t size) {
+			auto low_2g = PLH::calc_2gb_below(addr);
+			auto high_2g = PLH::calc_2gb_above(addr);
+			if(begin >= high_2g || end <= low_2g) return 0;
+
+			for(auto& gc: gcs){
+				if(auto found = gc.allocInRange(low_2g, high_2g, size); found)
+					return found;
+			}
+			return 0; //fails
 		}
 
 		uint64_t alloc(uint16_t size){
@@ -107,13 +129,13 @@ namespace {
 			auto end = i == N-1 ? md->end : (moduleBase + (pSec+1)->VirtualAddress);
 
 			if(strcmp(name, ".reloc") == 0){//.reloc section is useless after loading.
-				printf("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin, end, end - begin);
+				PLH_INFO("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin, end, end - begin);
 				md->gcs.push_back({ begin, end, 0 });
 			} else {
 				//reuse gap between sections if possible
 				auto vsize = std::max(pSec->SizeOfRawData, pSec->Misc.VirtualSize);
 				if(begin + vsize < end){
-					printf("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin + vsize, end, end - begin -vsize);
+					PLH_INFO("adds hole >> [%ls] %s: [%I64X, %I64X) len [%I64d]\n", md->name.data(), name, begin + vsize, end, end - begin -vsize);
 					md->gcs.push_back({
 						begin + vsize, end, 0
 					});
@@ -143,8 +165,8 @@ namespace {
 
 		int N = modules.size();
 		int sum = 0;
-		printf("******** GC Sumamry ********\n");
-		printf("Total modules: %d\n\n", N);
+		PLH_INFO("******** GC Sumamry ********\n");
+		PLH_INFO("Total modules: %d\n\n", N);
 		for(int i = 0; i < N; i++){
 			const auto& md = *modules[i];
 			int j = 0;
@@ -152,20 +174,26 @@ namespace {
 				j += (gc.end - gc.pos - gc.begin);
 			}
 			sum += j;
-			printf("[%d/%d] [%I64X, %I64X) %ls: total free bytes = %d\n", i, N, md.begin, md.end, md.name.data(), j);
+			PLH_INFO("[%d/%d] [%I64X, %I64X) %ls: total free bytes = %d\n", i, N, md.begin, md.end, md.name.data(), j);
 		}
-		printf("\nTotal free bytes: %d\n\n", sum);
+		PLH_INFO("\nTotal free bytes: %d\n\n", sum);
 	}
 
 	uint64_t findCodeCaveInModule(uint64_t addr, uint16_t size){
 		initModuleList();
 
-		//find the module
+		//try allocating in the hosting module 
+		//PE32+ images allow for a 64-bit address space while limiting the image size to 2 gigabytes.
 		for(auto& m: modules){
 			if(m->has(addr)){
 				if(auto found = m->alloc(size); found)
 					return found;
 			}
+		}
+		//try allocating in nearby modules
+		for(auto& m: modules){
+			if(auto found = m->allocWithin2G(addr, size); found)
+				return found;
 		}
 		return 0;
 	}

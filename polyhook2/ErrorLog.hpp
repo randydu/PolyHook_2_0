@@ -12,7 +12,7 @@ namespace PLH {
 class Logger
 {
 public:
-	virtual void log(std::string msg, ErrorLevel level) = 0;
+	virtual void log(const std::string& msg, ErrorLevel level) = 0;
 	virtual ~Logger() {};
 };
 
@@ -23,8 +23,16 @@ private:
 	static std::shared_ptr<Logger> m_logger;
 public:
 	static void registerLogger(std::shared_ptr<Logger> logger);
-	static void log(std::string msg, ErrorLevel level);
+	static void log(const std::string& msg, ErrorLevel level);
+	static void log(ErrorLevel level, const char* fmt, ...);
 };
+
+
+#define PLH_LOG(level, fmt, ...) do { PLH::Log::log(PLH::ErrorLevel::##level, fmt, ##__VA_ARGS__); } while(0)
+
+#define PLH_INFO(fmt, ...) PLH_LOG(INFO, fmt, ##__VA_ARGS__)
+#define PLH_WARN(fmt, ...) PLH_LOG(WARN, fmt, ##__VA_ARGS__)
+#define PLH_ERROR(fmt, ...) PLH_LOG(SEV, fmt, ##__VA_ARGS__)
 
 // simple logger implementation
 
@@ -36,8 +44,8 @@ struct Error {
 class ErrorLog : public Logger {
 public:
 	void setLogLevel(ErrorLevel level);
-	void log(std::string msg, ErrorLevel level);
-	void push(std::string msg, ErrorLevel level);
+	virtual void log(const std::string& msg, ErrorLevel level) override;
+	void push(const std::string& msg, ErrorLevel level);
 	void push(Error err);
 	Error pop();
 	static ErrorLog& singleton();

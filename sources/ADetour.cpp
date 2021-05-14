@@ -164,8 +164,8 @@ bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const in
 				we can't fix the load. TODO: generate equivalent load
 				with asmjit and insert it at position
 				*/
-				std::string err = "Cannot fixup IP relative data operation, needed disp. beyond max disp range: " + inst.getFullName() +
-					" needed: " + int_to_hex((uint64_t)std::llabs(delta)) + " raw: " + int_to_hex(delta) +  " max: " + int_to_hex(inst.getMaxDisp());
+				std::string err = "Cannot fixup IP relative data operation, needed disp. beyond max disp range: \n inst: " + inst.getFullName() +
+					"\n needed: " + int_to_hex((uint64_t)std::llabs(delta)) + "\n raw: " + int_to_hex(delta) +  "\n max: " + int_to_hex(inst.getMaxDisp()) + "\n\n";
 				Log::log(err, ErrorLevel::SEV);
 				return false;
 			}else {
