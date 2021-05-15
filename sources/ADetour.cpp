@@ -33,15 +33,29 @@ std::optional<PLH::insts_t> PLH::Detour::calcNearestSz(const PLH::insts_t& funct
 	return std::nullopt;
 }
 
-bool PLH::Detour::followJmp(PLH::insts_t& functionInsts) {
-	if (m_curDepth >= m_followJmpMaxDepth) {
-		Log::log("Prologue jmp resolution hit max depth, follow stopped.", ErrorLevel::WARN);
+bool PLH::Detour::followJmp(PLH::insts_t& functionInsts, uint64_t minProlSz) {
+	if(m_followScheme == follow_scheme_t::FOLLOW_DISABLED){
+		PLH_INFO("follow is disabled");
 		return true;
 	}
 
 	if (functionInsts.size() <= 0) {
-		Log::log("Couldn't decompile instructions at followed jmp", ErrorLevel::WARN);
+		PLH_WARN("Couldn't decompile instructions at followed jmp");
 		return false;
+	}
+
+	if (m_curDepth >= m_followJmpMaxDepth) {
+		PLH_WARN("hit max depth, follow stopped.");
+		return true;
+	}
+
+	if(m_followScheme == follow_scheme_t::FOLLOW_UNTIL_PROLOG_FITTED_OR_NO_BRANCH){
+		uint64_t roundProlSz;
+		auto prologueOpt = calcNearestSz(functionInsts, minProlSz, roundProlSz);
+		if (prologueOpt) {
+			PLH_INFO("Prologue found.");
+			return true;
+		}
 	}
 
 	// not a branching instruction, no resolution needed
@@ -51,14 +65,14 @@ bool PLH::Detour::followJmp(PLH::insts_t& functionInsts) {
 
 	// might be a mem type like jmp rax, not supported
 	if (!functionInsts.front().hasDisplacement()) {
-		Log::log("Branching instruction without displacement encountered", ErrorLevel::WARN);
+		PLH_WARN("Branching instruction without displacement encountered: inst [%s]", functionInsts.front().getFullName().c_str());
 		return false;
 	}
 
 	uint64_t dest = functionInsts.front().getDestination();
 	functionInsts = m_disasm.disassemble(dest, dest, dest + 100, *this);
 	++m_curDepth;
-	return followJmp(functionInsts); // recurse
+	return followJmp(functionInsts, minProlSz); // recurse
 }
 
 void PLH::Detour::writeNop(uint64_t base, uint32_t size) {

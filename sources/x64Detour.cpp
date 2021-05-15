@@ -409,7 +409,9 @@ bool PLH::x64Detour::hook() {
 		return false;
 	}
 
-	if (!followJmp(insts)) {
+	uint64_t minProlSz = getMinPrologueSize();  // min size of patches that may split instructions
+
+	if (!followJmp(insts, minProlSz)) {
 		Log::log("Prologue jmp resolution failed", ErrorLevel::SEV);
 		return false;
 	}
@@ -421,7 +423,6 @@ bool PLH::x64Detour::hook() {
 	Log::log("Original function:\n" + instsToStr(insts) + "\n", ErrorLevel::INFO);
 
 	
-	uint64_t minProlSz = getMinPrologueSize();  // min size of patches that may split instructions
 	uint64_t roundProlSz = minProlSz; // nearest size to min that doesn't split any instructions
 
 	std::optional<PLH::insts_t> prologueOpt;

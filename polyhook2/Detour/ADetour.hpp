@@ -110,6 +110,19 @@ public:
 
 	static constexpr int FOLLOW_JMP_MAX_PATH = 10;
 
+    enum class follow_scheme_t {
+		FOLLOW_UNTIL_NO_BRANCH,							//Continue following until max-depth or hit a non-branching instruction.
+		FOLLOW_UNTIL_PROLOG_FITTED_OR_NO_BRANCH,		//Continue following until max-depth or a place is found to fit our prolog code or hit a non-branching instruction. 
+		FOLLOW_DISABLED,								//Follow is disabled. (== max-depth is 0).
+	};
+
+	follow_scheme_t getFollowScheme() const {
+		return m_followScheme;
+	}
+	void setFollowScheme(follow_scheme_t scheme){
+		m_followScheme = scheme;
+	}
+
 	int getFollowJmpMaxDepth() const {
 		return m_followJmpMaxDepth;
 	}
@@ -141,6 +154,7 @@ protected:
 
 	int 					m_curDepth {0}; //current follow-jmp depth
 	int 					m_followJmpMaxDepth {FOLLOW_JMP_MAX_PATH}; //enable follow-jmp feature, ON by default for backward compatibility
+	follow_scheme_t			m_followScheme { follow_scheme_t::FOLLOW_UNTIL_NO_BRANCH}; //default behavior as before
 
 	/**Walks the given vector of instructions and sets roundedSz to the lowest size possible that doesn't split any instructions and is greater than minSz.
 	If end of function is encountered before this condition an empty optional is returned. Returns instructions in the range start to adjusted end**/
@@ -150,7 +164,7 @@ protected:
 	/**If function starts with a jump follow it until the first non-jump instruction, recursively. This handles already hooked functions
 	and also compilers that emit jump tables on function call. Returns true if resolution was successful (nothing to resolve, or resolution worked),
 	false if resolution failed.**/
-	bool followJmp(insts_t& functionInsts);
+	bool followJmp(insts_t& functionInsts, uint64_t minProlSz);
 
 	/**Expand the prologue up to the address of the last jmp that points back into the prologue. This
 	is necessary because we modify the location of things in the prologue, so re-entrant jmps point
