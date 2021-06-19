@@ -132,7 +132,9 @@ public:
 
 	//Can we relocate to the new memory location?
 	bool canRelocate(int64_t delta) const {
-		if(m_isIndirect){
+		if(!hasDisplacement()) return true;
+
+		if(isDisplacementRelative()){
 			//current dest-pointer
 			auto pdest = m_address + m_displacement.Relative + size();
 			auto new_delta = m_address + delta + size() - pdest;
@@ -145,9 +147,11 @@ public:
 	//Relocate to the new memory location, keeping the destination untouched.
 	//throw exception if fails.
 	void relocate(int64_t delta){
+		if(!hasDisplacement()) return;
+
 		assert(canRelocate(delta));
 
-		if(m_isIndirect){
+		if(isDisplacementRelative()){
 			auto pdest = m_address + m_displacement.Relative + size();
 			m_address += delta;
 			setDisplacementByDestination(pdest);

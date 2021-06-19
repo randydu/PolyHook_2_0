@@ -158,7 +158,7 @@ bool buildRelocationList(insts_t& prologue, const uint64_t roundProlSz, const in
 
 	for (auto& inst : prologue) {
 		// types that change control flow
-		if (inst.isBranching() && inst.hasDisplacement() &&
+		if (inst.isBranching() && inst.hasDisplacement() && inst.isDisplacementRelative() &&
 			(inst.getDestination() < prolStart ||
 			inst.getDestination() > prolStart + roundProlSz)) {
 
